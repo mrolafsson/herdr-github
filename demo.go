@@ -251,7 +251,7 @@ func (d *demoSource) spaceRepos() []repoRef {
 
 // The demo's GitHub: its own repos, plus a few you'd reach through other
 // orgs and your own account.
-func (d *demoSource) repos(context.Context) ([]repoInfo, error) {
+func (d *demoSource) repos(context.Context, string) ([]repoInfo, string, error) {
 	now := nowFn()
 	var out []repoInfo
 	for i, r := range []string{
@@ -261,7 +261,7 @@ func (d *demoSource) repos(context.Context) ([]repoInfo, error) {
 		owner, name, _ := strings.Cut(r, "/")
 		out = append(out, repoInfo{repoRef{"github.com", owner, name}, now.Add(-time.Duration(i) * 6 * time.Hour)})
 	}
-	return out, nil
+	return out, "", nil
 }
 
 func (d *demoSource) find(key string) *prDetail {

@@ -119,7 +119,8 @@ organisation** (opened outside a repo, the tab starts on it):
 - then the orgs of your recent picks, your herdr spaces and your PRs;
 - then every other repo you can reach on GitHub (your own, your orgs',
   ones you collaborate on; archived ones left out), most recently pushed
-  first. These arrive a moment after the picker opens.
+  first. They're fetched as the popup opens, and last time's list shows
+  until they arrive.
 
 Type to filter: an org's name keeps its whole group. Any `owner/repo` (or
 `host/owner/repo`) that isn't listed is offered as typed. The pick lasts for
@@ -358,7 +359,8 @@ PR's branch.
 
 **What's kept locally**, in `~/.local/state/herdr/plugins/herdr-github/`,
 readable only by you: `lists.json` (the last lists, shown while fresh ones
-load: numbers, titles, branches, states), `labels.json` (each branch's PR
+load: numbers, titles, branches, states), `lists.json` also keeps the repos you can
+reach, for the repo list. `labels.json` (each branch's PR
 status, for the labels), `prefs.json` (your last tab, your merge method per
 repo, repos you picked lately) and the background log.
 

@@ -203,7 +203,8 @@ type model struct {
 	// The repo picker's choices (repopicker.go): what's here, and what you
 	// can reach on GitHub, fetched once per popup.
 	repoLocal     []repoChoice
-	repoRemote    []repoInfo
+	repoRemote    []repoInfo // what the list shows: fresh pages, gaps filled from last time
+	repoFresh     []repoInfo // the pages fetched so far this time
 	remoteLoaded  bool
 	remoteLoading bool
 
@@ -367,6 +368,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.filter.Width = max(10, msg.Width-6)
+		// Whatever was laid out before the size was known (last time's
+		// lists), lay out again from the top.
+		m.offset = 0
+		m.scrollTo()
 		return m, nil
 
 	case spinner.TickMsg:
@@ -449,13 +454,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.openMenu(m.repoMenu()), nil
 
 	case remoteReposMsg:
-		m.remoteLoading, m.remoteLoaded = false, true
-		m.repoRemote = msg.repos
-		if msg.err != nil && len(msg.repos) == 0 {
-			m.flash = "" // the picker still has the local repos
-			m.err = "Couldn't list your GitHub repos: " + msg.err.Error()
-		}
-		return m.refreshRepoMenu(), nil
+		return m.takeRemoteRepos(msg)
 
 	case loginDoneMsg:
 		if msg.err != nil {
@@ -1399,9 +1398,17 @@ func runPicker(ctx context.Context, cfg config, demo bool) error {
 		m = m.useCache(readListCache(repo))
 	}
 	m = m.settle()
+	if !demo {
+		// Your repos, for the repo list: last time's at once, and fresh ones
+		// asked for now, so they're there by the time you open it.
+		m.repoRemote = readRepoCache(cfg)
+		m.remoteLoading = true
+		m.startCmd = m.loadRemoteRepos("")
+	}
 	if m.tab == tabRepo && m.repo == nil {
 		next, cmd := m.openRepoPicker()
-		m, m.startCmd = next.(model), cmd
+		m = next.(model)
+		m.startCmd = tea.Batch(m.startCmd, cmd)
 	}
 	program = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	_, err := program.Run()

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -32,8 +34,9 @@ type source interface {
 	merge(ctx context.Context, d *prDetail, method string, auto bool) error
 	disableAutoMerge(ctx context.Context, d *prDetail) error
 	deleteBranch(ctx context.Context, d *prDetail) error
-	// repos are the repos you can reach, for the repo picker.
-	repos(ctx context.Context) ([]repoInfo, error)
+	// repos pages through the repos you can reach, for the repo list:
+	// the first page with cursor "", then each page's next until it's "".
+	repos(ctx context.Context, cursor string) ([]repoInfo, string, error)
 }
 
 // githubSource talks to every configured host, one client per host.
@@ -182,20 +185,27 @@ func isPartial(err error) bool {
 	return errors.As(err, &p)
 }
 
-// repos asks every host for your repos; a host that fails is left out
-// unless all do.
-func (s *githubSource) repos(ctx context.Context) ([]repoInfo, error) {
-	var all []repoInfo
-	var firstErr error
-	for _, h := range s.cfg.Hosts {
-		rs, err := s.client(h).viewerRepos(ctx)
-		all = append(all, rs...)
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
+// repos pages through each host in turn. The cursor is "<host index>:<GitHub's
+// cursor>". A host that fails is skipped, unless it's the only one.
+func (s *githubSource) repos(ctx context.Context, cursor string) ([]repoInfo, string, error) {
+	i, after := 0, ""
+	if cursor != "" {
+		n, rest, _ := strings.Cut(cursor, ":")
+		i, _ = strconv.Atoi(n)
+		after = rest
 	}
-	if len(all) > 0 {
-		return all, nil
+	if i >= len(s.cfg.Hosts) {
+		return nil, "", nil
 	}
-	return nil, firstErr
+	rs, next, err := s.client(s.cfg.Hosts[i]).viewerReposPage(ctx, after)
+	switch {
+	case next != "":
+		next = strconv.Itoa(i) + ":" + next
+	case i+1 < len(s.cfg.Hosts):
+		next = strconv.Itoa(i+1) + ":"
+	}
+	if err != nil && len(s.cfg.Hosts) > 1 {
+		return rs, next, nil
+	}
+	return rs, next, err
 }

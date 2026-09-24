@@ -490,7 +490,7 @@ func TestRepoPickerAddsGitHubReposWhenTheyArrive(t *testing.T) {
 		t.Fatalf("before GitHub answers:\n%s", plain(m))
 	}
 	m = press(m, "down") // onto sync-server
-	next, _ = m.Update(m.loadRemoteRepos()())
+	next, _ = m.Update(m.loadRemoteRepos("")())
 	m = next.(model)
 	if !strings.Contains(plain(m), "dotfiles") || m.menuItems()[m.menuCursor].label != "sync-server" {
 		t.Fatalf("after GitHub answers, cursor on %q:\n%s", m.menuItems()[m.menuCursor].label, plain(m))

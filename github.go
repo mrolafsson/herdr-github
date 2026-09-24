@@ -745,39 +745,53 @@ const viewerReposQuery = `query($after: String) {
   }
 }`
 
-// viewerRepos lists the repos you own or reach through an org or as a
-// collaborator, most recently pushed first, up to 300.
+// viewerReposPage is one page (100) of the repos you own or reach through
+// an org or as a collaborator, most recently pushed first. next continues it.
+func (c *ghClient) viewerReposPage(ctx context.Context, after string) (out []repoInfo, next string, err error) {
+	var res struct {
+		Viewer struct {
+			Repositories struct {
+				PageInfo struct {
+					HasNextPage bool   `json:"hasNextPage"`
+					EndCursor   string `json:"endCursor"`
+				} `json:"pageInfo"`
+				Nodes []struct {
+					NameWithOwner string    `json:"nameWithOwner"`
+					PushedAt      time.Time `json:"pushedAt"`
+				} `json:"nodes"`
+			} `json:"repositories"`
+		} `json:"viewer"`
+	}
+	vars := map[string]any{"after": nil}
+	if after != "" {
+		vars["after"] = after
+	}
+	err = c.graphql(ctx, viewerReposQuery, vars, &res)
+	if err != nil && !isPartial(err) {
+		return nil, "", err
+	}
+	for _, n := range res.Viewer.Repositories.Nodes {
+		if owner, name, ok := strings.Cut(n.NameWithOwner, "/"); ok {
+			out = append(out, repoInfo{repoRef{Host: c.host, Owner: owner, Name: name}, n.PushedAt})
+		}
+	}
+	if res.Viewer.Repositories.PageInfo.HasNextPage {
+		next = res.Viewer.Repositories.PageInfo.EndCursor
+	}
+	return out, next, nil
+}
+
+// viewerRepos lists them all, up to 300.
 func (c *ghClient) viewerRepos(ctx context.Context) ([]repoInfo, error) {
 	var out []repoInfo
-	var after any
+	after := ""
 	for page := 0; page < 3; page++ {
-		var res struct {
-			Viewer struct {
-				Repositories struct {
-					PageInfo struct {
-						HasNextPage bool   `json:"hasNextPage"`
-						EndCursor   string `json:"endCursor"`
-					} `json:"pageInfo"`
-					Nodes []struct {
-						NameWithOwner string    `json:"nameWithOwner"`
-						PushedAt      time.Time `json:"pushedAt"`
-					} `json:"nodes"`
-				} `json:"repositories"`
-			} `json:"viewer"`
-		}
-		err := c.graphql(ctx, viewerReposQuery, map[string]any{"after": after}, &res)
-		if err != nil && !isPartial(err) {
+		rs, next, err := c.viewerReposPage(ctx, after)
+		out = append(out, rs...)
+		if err != nil || next == "" {
 			return out, err
 		}
-		for _, n := range res.Viewer.Repositories.Nodes {
-			if owner, name, ok := strings.Cut(n.NameWithOwner, "/"); ok {
-				out = append(out, repoInfo{repoRef{Host: c.host, Owner: owner, Name: name}, n.PushedAt})
-			}
-		}
-		if !res.Viewer.Repositories.PageInfo.HasNextPage {
-			return out, nil
-		}
-		after = res.Viewer.Repositories.PageInfo.EndCursor
+		after = next
 	}
 	return out, nil
 }

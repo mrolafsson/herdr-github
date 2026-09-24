@@ -20,6 +20,7 @@ type listCache struct {
 	Saved time.Time             `json:"saved"`
 	Repo  string                `json:"repo"` // the repo tab's repo, by key
 	Tabs  map[tab][]pullRequest `json:"tabs"`
+	Repos []repoInfo            `json:"repos"` // the repos you can reach, for the repo list
 }
 
 func listCachePath() string { return filepath.Join(stateDir(), "lists.json") }
@@ -56,6 +57,42 @@ func saveListCache(t tab, prs []pullRequest, repo *repoRef) {
 		c.Repo = repo.key()
 	}
 	c.Tabs[t], c.Saved = prs, nowFn()
+	data, err := json.Marshal(c)
+	if err != nil || os.MkdirAll(stateDir(), 0o700) != nil {
+		return
+	}
+	tmp := listCachePath() + ".tmp"
+	if os.WriteFile(tmp, data, 0o600) == nil {
+		_ = os.Rename(tmp, listCachePath())
+	}
+}
+
+// readRepoCache returns the repos you could reach last time, on the hosts
+// configured now.
+func readRepoCache(cfg config) []repoInfo {
+	var c listCache
+	data, err := os.ReadFile(listCachePath())
+	if err != nil || json.Unmarshal(data, &c) != nil {
+		return nil
+	}
+	var out []repoInfo
+	for _, r := range c.Repos {
+		if r.Repo.valid() && cfg.knownHost(r.Repo.Host) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// saveRepoCache stores the repos you can reach, keeping the lists.
+func saveRepoCache(repos []repoInfo) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	var c listCache
+	if data, err := os.ReadFile(listCachePath()); err == nil {
+		_ = json.Unmarshal(data, &c)
+	}
+	c.Repos = repos
 	data, err := json.Marshal(c)
 	if err != nil || os.MkdirAll(stateDir(), 0o700) != nil {
 		return

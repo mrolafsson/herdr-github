@@ -82,18 +82,67 @@ func dedupeChoices(cs []repoChoice) []repoChoice {
 	return out
 }
 
-// remoteReposMsg brings the repos you can reach on GitHub.
+// remoteReposMsg brings a page of the repos you can reach on GitHub.
 type remoteReposMsg struct {
-	repos []repoInfo
-	err   error
+	cursor string // the page asked for: "" is the first
+	repos  []repoInfo
+	next   string
+	err    error
 }
 
-func (m model) loadRemoteRepos() tea.Cmd {
+func (m model) loadRemoteRepos(cursor string) tea.Cmd {
 	client, ctx := m.client, m.ctx
 	return func() tea.Msg {
-		rs, err := client.repos(ctx)
-		return remoteReposMsg{rs, err}
+		rs, next, err := client.repos(ctx, cursor)
+		return remoteReposMsg{cursor, rs, next, err}
 	}
+}
+
+// mergeRepos is fresh, then whatever of old fresh doesn't have yet: while
+// the pages come in, last time's list fills the gaps.
+func mergeRepos(fresh, old []repoInfo) []repoInfo {
+	seen := map[string]bool{}
+	out := append([]repoInfo(nil), fresh...)
+	for _, r := range fresh {
+		seen[r.Repo.key()] = true
+	}
+	for _, r := range old {
+		if !seen[r.Repo.key()] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// takeRemoteRepos adds a page to the repo list. It's saved after every
+// page, so even a popup closed a moment after opening leaves a list for the
+// next one.
+func (m model) takeRemoteRepos(msg remoteReposMsg) (model, tea.Cmd) {
+	if msg.cursor == "" {
+		m.repoFresh = nil
+	}
+	if msg.err != nil && len(msg.repos) == 0 {
+		m.remoteLoading, m.remoteLoaded = false, true
+		// Keep last time's list; say so only if there's none.
+		if len(m.repoRemote) == 0 && m.menu != nil && m.menu.id == "repos" {
+			m.err = "Couldn't list your GitHub repos: " + msg.err.Error()
+		}
+		return m.refreshRepoMenu(), nil
+	}
+	m.repoFresh = append(m.repoFresh, msg.repos...)
+	var cmds []tea.Cmd
+	if msg.next != "" && len(m.repoFresh) < 300 {
+		m.repoRemote = mergeRepos(m.repoFresh, m.repoRemote)
+		cmds = append(cmds, m.loadRemoteRepos(msg.next))
+	} else {
+		m.repoRemote = m.repoFresh
+		m.remoteLoading, m.remoteLoaded = false, true
+	}
+	if !m.demo {
+		repos := append([]repoInfo(nil), m.repoRemote...)
+		cmds = append(cmds, func() tea.Msg { saveRepoCache(repos); return nil })
+	}
+	return m.refreshRepoMenu(), tea.Batch(cmds...)
 }
 
 // repoEntry is a repo in the picker: from here (a space, a recent pick, a
@@ -112,7 +161,7 @@ type repoEntry struct {
 // owner/repo that isn't listed is offered as typed.
 func (m model) repoMenu() *menu {
 	title := "Pull requests of which repo?"
-	if !m.remoteLoaded {
+	if !m.remoteLoaded && len(m.repoRemote) == 0 {
 		title += " (loading yours from GitHub…)"
 	}
 	mn := &menu{id: "repos", title: title, filterable: true}
@@ -269,7 +318,7 @@ func (m model) openRepoPicker() (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{m.loadRepoChoices()}
 	if !m.remoteLoaded && !m.remoteLoading {
 		m.remoteLoading = true
-		cmds = append(cmds, m.loadRemoteRepos())
+		cmds = append(cmds, m.loadRemoteRepos(""))
 	}
 	return m, tea.Batch(cmds...)
 }
