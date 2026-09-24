@@ -28,6 +28,13 @@ func (e *signedOutError) Error() string {
 }
 func (e *signedOutError) Unwrap() error { return errSignedOut }
 
+// partialError: GitHub answered, but with errors for part of the answer (a
+// repo in an org whose SAML sign-on the token lacks, say). What came back is
+// used; the error says what's missing.
+type partialError struct{ msg string }
+
+func (e *partialError) Error() string { return e.msg }
+
 // errTruncated: a list stopped at the cap rather than page on without end.
 var errTruncated = errors.New("showing the first 200: filter, or open GitHub for the rest")
 
@@ -364,7 +371,15 @@ func (c *ghClient) graphql(ctx context.Context, query string, vars map[string]an
 		for _, e := range reply.Errors {
 			msgs = append(msgs, clean(e.Message, false))
 		}
-		return errors.New("GitHub: " + strings.Join(msgs, "; "))
+		msg := "GitHub: " + strings.Join(msgs, "; ")
+		if out == nil || len(reply.Data) == 0 || string(reply.Data) == "null" {
+			return errors.New(msg)
+		}
+		if err := json.Unmarshal(reply.Data, out); err != nil {
+			return errors.New(msg)
+		}
+		sanitize(out)
+		return &partialError{msg}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("GitHub: HTTP %d", resp.StatusCode)
@@ -426,7 +441,9 @@ func (c *ghClient) searchPage(ctx context.Context, q string, first int, after st
 	if after != "" {
 		vars["after"] = after
 	}
-	if err := c.graphql(ctx, searchQuery, vars, &res); err != nil {
+	err = c.graphql(ctx, searchQuery, vars, &res)
+	var partial *partialError
+	if err != nil && !errors.As(err, &partial) {
 		return nil, "", err
 	}
 	for _, pr := range res.Search.Nodes {
@@ -439,7 +456,7 @@ func (c *ghClient) searchPage(ctx context.Context, q string, first int, after st
 	if res.Search.PageInfo.HasNextPage {
 		next = res.Search.PageInfo.EndCursor
 	}
-	return prs, next, nil
+	return prs, next, err
 }
 
 // search lists every PR matching a GitHub search, up to listCap.
@@ -533,9 +550,12 @@ func (c *ghClient) detail(ctx context.Context, pr pullRequest) (*prDetail, error
 			} `json:"reviewThreads"`
 		} `json:"node"`
 	}
-	if err := c.graphql(ctx, detailQuery, map[string]any{"id": pr.ID, "n": pr.Number}, &res); err != nil {
+	err := c.graphql(ctx, detailQuery, map[string]any{"id": pr.ID, "n": pr.Number}, &res)
+	var partial *partialError
+	if err != nil && (!errors.As(err, &partial) || res.Node == nil) {
 		return nil, err
 	}
+	// A partial answer (a reviewer team the token can't see) still shows.
 	n := res.Node
 	if n == nil {
 		return nil, fmt.Errorf("#%d isn't there any more", pr.Number)
@@ -670,7 +690,9 @@ func (c *ghClient) prsForBranches(ctx context.Context, r repoRef, heads []branch
 			Nodes []prStatus `json:"nodes"`
 		} `json:"repository"`
 	}
-	if err := c.graphql(ctx, b.String(), vars, &res); err != nil {
+	err := c.graphql(ctx, b.String(), vars, &res)
+	var partial *partialError
+	if err != nil && !errors.As(err, &partial) {
 		return nil, err
 	}
 	out := map[branchHead]prStatus{}

@@ -134,6 +134,30 @@ func remoteFor(ctx context.Context, dir string, r repoRef) (remote, bool) {
 	return remote{}, false
 }
 
+// remoteForCheckout is remoteFor for a checkout already chosen (mapped in
+// the config, say), where a remote may name the host by an SSH alias
+// ("git@work-github:o/r"): then owner and name are enough.
+func remoteForCheckout(ctx context.Context, dir string, r repoRef) (remote, bool) {
+	if x, ok := remoteFor(ctx, dir, r); ok {
+		return x, true
+	}
+	var found []remote
+	for _, x := range remotesOf(ctx, dir) {
+		if strings.EqualFold(x.Repo.Owner, r.Owner) && strings.EqualFold(x.Repo.Name, r.Name) {
+			found = append(found, x)
+		}
+	}
+	for _, x := range found {
+		if x.Name == "upstream" || x.Name == "origin" {
+			return x, true
+		}
+	}
+	if len(found) > 0 {
+		return found[0], true
+	}
+	return remote{}, false
+}
+
 // noCheckoutError: no local clone of a repo was found.
 type noCheckoutError struct {
 	Repo repoRef

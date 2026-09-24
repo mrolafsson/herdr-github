@@ -36,6 +36,38 @@ func localBranch(pr pullRequest) string {
 	return pr.HeadRefName
 }
 
+// prMarker is the git config key (branch.<name>.herdr-github-pr) naming the
+// PR a branch was made for. Branch names alone can collide: a branch of the
+// repo called "alice/fix" and alice's fork PR from "fix" would share one.
+const prMarker = "herdr-github-pr"
+
+// branchConflict says why the PR can't use an existing local branch: it was
+// made for another PR, or (for a fork's PR) it's a branch of yours that only
+// happens to have the name.
+func branchConflict(ctx context.Context, dir string, pr pullRequest, branch string) error {
+	mark, _ := git(ctx, dir, "config", "--get", "branch."+branch+"."+prMarker)
+	switch {
+	case mark == pr.key():
+		return nil
+	case mark != "":
+		return fmt.Errorf("the branch %s is %s's, not #%d's", branch, mark, pr.Number)
+	case pr.IsCrossRepository:
+		return fmt.Errorf("a branch named %s already exists and isn't #%d's: rename it to check out the fork's", branch, pr.Number)
+	}
+	return nil
+}
+
+// prWorktree finds the linked worktree on branch in dir. The main checkout
+// never counts: it's the repo itself, whatever branch it's on.
+func prWorktree(wts []worktreeInfo, branch string) *worktreeInfo {
+	for i, w := range wts {
+		if w.IsLinkedWorktree && strings.TrimPrefix(w.Branch, "refs/heads/") == branch {
+			return &wts[i]
+		}
+	}
+	return nil
+}
+
 func worktreeLabel(pr pullRequest) string {
 	return shorten(fmt.Sprintf("#%d %s", pr.Number, pr.Title), 48)
 }
@@ -61,15 +93,16 @@ func openWorktree(ctx context.Context, pr pullRequest, dir string) (*worktreeRes
 	if err != nil {
 		return nil, false, err
 	}
-	for _, w := range existing {
-		if strings.TrimPrefix(w.Branch, "refs/heads/") == branch {
-			var res worktreeResult
-			err := herdrCall("worktree.open", map[string]any{"cwd": dir, "path": w.Path, "label": worktreeLabel(pr), "focus": true}, &res)
-			return &res, false, err
+	if w := prWorktree(existing, branch); w != nil {
+		if err := branchConflict(ctx, dir, pr, branch); err != nil {
+			return nil, false, err
 		}
+		var res worktreeResult
+		err := herdrCall("worktree.open", map[string]any{"cwd": dir, "path": w.Path, "label": worktreeLabel(pr), "focus": true}, &res)
+		return &res, false, err
 	}
 
-	rem, ok := remoteFor(ctx, dir, pr.repo())
+	rem, ok := remoteForCheckout(ctx, dir, pr.repo())
 	if !ok {
 		return nil, false, fmt.Errorf("%s has no remote for %s", dir, pr.repo())
 	}
@@ -88,7 +121,11 @@ func openWorktree(ctx context.Context, pr pullRequest, dir string) (*worktreeRes
 	switch {
 	case haveLocal == nil:
 		// A branch of that name already exists (its worktree was removed,
-		// say): check it out as it is rather than lose commits on it.
+		// say): check it out as it is rather than lose commits on it, but
+		// only if it's this PR's.
+		if err := branchConflict(ctx, dir, pr, branch); err != nil {
+			return nil, false, err
+		}
 	case fetchErr != nil:
 		return nil, false, fmt.Errorf("couldn't fetch #%d from %s: %v", pr.Number, rem.Name, fetchErr)
 	default:
@@ -99,6 +136,7 @@ func openWorktree(ctx context.Context, pr pullRequest, dir string) (*worktreeRes
 		return nil, false, err
 	}
 	if haveLocal != nil && res.Worktree.Path != "" {
+		_, _ = git(ctx, res.Worktree.Path, "config", "branch."+branch+"."+prMarker, pr.key())
 		trackHead(ctx, res.Worktree.Path, pr, rem, branch)
 	}
 	return &res, true, nil
@@ -172,19 +210,20 @@ func removeWorktree(ctx context.Context, pr pullRequest, dir string) error {
 		return err
 	}
 	branch := localBranch(pr)
-	for _, w := range ws {
-		if strings.TrimPrefix(w.Branch, "refs/heads/") != branch {
-			continue
-		}
-		if w.OpenWorkspaceID != "" {
-			return herdrCall("worktree.remove", map[string]any{"workspace_id": w.OpenWorkspaceID}, nil)
-		}
-		if out, err := exec.CommandContext(ctx, "git", "-C", dir, "worktree", "remove", w.Path).CombinedOutput(); err != nil {
-			return errors.New(strings.TrimSpace(clean(string(out), false)))
-		}
-		return nil
+	w := prWorktree(ws, branch)
+	if w == nil {
+		return errors.New("its worktree is already gone")
 	}
-	return errors.New("its worktree is already gone")
+	if err := branchConflict(ctx, dir, pr, branch); err != nil {
+		return err
+	}
+	if w.OpenWorkspaceID != "" {
+		return herdrCall("worktree.remove", map[string]any{"workspace_id": w.OpenWorkspaceID}, nil)
+	}
+	if out, err := exec.CommandContext(ctx, "git", "-C", dir, "worktree", "remove", w.Path).CombinedOutput(); err != nil {
+		return errors.New(strings.TrimSpace(clean(string(out), false)))
+	}
+	return nil
 }
 
 // ── detached helpers ──────────────────────────────────────────────────────────
@@ -209,13 +248,35 @@ func spawnDetached(stdin string, args ...string) error {
 	}
 	defer logf.Close()
 	cmd := exec.Command(self, args...)
-	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
+	if err := startWithInput(cmd, stdin); err != nil {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+// startWithInput starts cmd with stdin on a pipe that's written in full
+// before it returns. With a Reader, exec copies stdin in a goroutine that dies
+// with this process, and the popup quits right after starting a kickoff, so
+// the child could read nothing.
+func startWithInput(cmd *exec.Cmd, stdin string) error {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stdin = r
+	err = cmd.Start()
+	r.Close()
+	if err != nil {
+		w.Close()
+		return err
+	}
+	_, werr := w.WriteString(stdin)
+	if cerr := w.Close(); werr == nil {
+		werr = cerr
+	}
+	return werr
 }
 
 // spawnTickFn refreshes the sidebar labels in the background after the

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -190,6 +191,7 @@ type model struct {
 	// A choice over the current screen: merge method, confirmations.
 	menu       *menu
 	menuCursor int
+	menuOpened time.Time // clicks right after this belong to the click that opened it
 
 	mouseX, mouseY int // last pointer position; -1 until the mouse moves
 }
@@ -224,6 +226,18 @@ func (m model) useCache(lists map[tab][]pullRequest) model {
 	if m.loaded[m.tab] {
 		m.mode = modeList
 		m.clampCursor()
+	}
+	return m
+}
+
+// settle puts the current tab in the right mode when nothing is coming for
+// it: the repo tab, opened outside a GitHub repo, has nothing to load.
+func (m model) settle() model {
+	if m.tab == tabRepo && m.repo == nil {
+		m.loaded[tabRepo] = true
+		if m.mode == modeLoading {
+			m.mode = modeList
+		}
 	}
 	return m
 }
@@ -313,7 +327,9 @@ func (m model) loadWorktrees(prs []pullRequest) tea.Cmd {
 			}
 			have := map[string]bool{}
 			for _, w := range wts {
-				have[strings.TrimPrefix(w.Branch, "refs/heads/")] = true
+				if w.IsLinkedWorktree { // the main checkout is the repo, not a PR's worktree
+					have[strings.TrimPrefix(w.Branch, "refs/heads/")] = true
+				}
 			}
 			for _, pr := range list {
 				marks[pr.key()] = have[localBranch(pr)]
@@ -355,8 +371,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mode, m.host = modeSignedOut, so.Host
 				return m, nil
 			}
-			// A cached list stays up, marked as such, with the reason.
-			m.loaded[t], m.paging[t], m.tabErr[t] = true, false, msg.err.Error()
+			// A cached list stays up, with the reason it's not fresh.
+			m.loaded[t], m.stale[t], m.paging[t], m.tabErr[t] = true, false, false, msg.err.Error()
 			return m, nil
 		}
 		keep := m.selectedKey()
@@ -454,6 +470,7 @@ func (m model) refreshAll() (model, tea.Cmd) {
 		// A new sign-in means new tokens: start the clients afresh.
 		m.client = newGitHubSource(m.cfg, gs.repo)
 	}
+	m = m.settle()
 	return m, tea.Batch(m.spin.Tick, m.loadAll())
 }
 
@@ -1020,8 +1037,9 @@ func (m model) currentFooter() []hint {
 // menu is a short list of choices shown over the current screen: how to
 // merge, what to clean up afterwards, whether to clone.
 type menu struct {
-	title string
-	items []menuItem
+	title  string
+	items  []menuItem
+	cursor int // where the cursor starts: a confirmation starts on Cancel
 }
 
 type menuItem struct {
@@ -1031,9 +1049,13 @@ type menuItem struct {
 }
 
 func (m model) openMenu(mn *menu) model {
-	m.menu, m.menuCursor, m.flash = mn, 0, ""
+	m.menu, m.menuCursor, m.flash, m.menuOpened = mn, mn.cursor, "", time.Now()
 	return m
 }
+
+// menuClickGuard is how long a new menu ignores clicks: the second click of a
+// double-click must not land on what appeared under it (a merge's "yes").
+var menuClickGuard = 400 * time.Millisecond
 
 func (m model) handleMenuKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	n := len(m.menu.items)
@@ -1121,12 +1143,13 @@ func runPicker(ctx context.Context, cfg config, demo bool) error {
 	}
 	m := newModel(ctx, cfg, client, invoked, repo)
 	if !demo {
+		// Open on the tab you were last on, showing last time's lists.
+		if t, ok := lastTab(); ok {
+			m.tab = t
+		}
 		m = m.useCache(readListCache(repo))
 	}
-	// Open on the tab you were last on.
-	if t, ok := lastTab(); ok && !demo {
-		m.tab = t
-	}
+	m = m.settle()
 	program = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	_, err := program.Run()
 	return err

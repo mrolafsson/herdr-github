@@ -41,6 +41,7 @@ type labelState struct {
 	LastTick time.Time              `json:"last_tick"`
 	Branches map[string]branchEntry `json:"branches"` // host/owner/repo + "\x00" + owner:branch
 	Reported map[string]reported    `json:"reported"` // space or pane ID → what was sent
+	Failed   map[string]time.Time   `json:"failed"`   // repo key → when GitHub last failed to answer
 }
 
 type branchEntry struct {
@@ -51,6 +52,7 @@ type branchEntry struct {
 type reported struct {
 	Tokens map[string]string `json:"tokens"`
 	At     time.Time         `json:"at"`
+	Branch string            `json:"branch"` // the branch (cache key) they were for
 }
 
 func labelStatePath() string { return filepath.Join(stateDir(), "labels.json") }
@@ -65,6 +67,9 @@ func readLabelState() labelState {
 	}
 	if s.Reported == nil {
 		s.Reported = map[string]reported{}
+	}
+	if s.Failed == nil {
+		s.Failed = map[string]time.Time{}
 	}
 	return s
 }
@@ -212,10 +217,10 @@ func spaceBranchOf(ctx context.Context, cfg config, w workspaceInfo) (spaceBranc
 		return spaceBranch{}, false
 	}
 	// The default branch is where PRs go, not where they come from.
-	if def, err := git(ctx, root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil && strings.TrimPrefix(def, "origin/") == branch {
-		return spaceBranch{}, false
-	}
-	if branch == "main" || branch == "master" {
+	def, _ := git(ctx, root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+	def = strings.TrimPrefix(def, "origin/")
+	isDefault := func(b string) bool { return b == def || b == "main" || b == "master" }
+	if isDefault(branch) {
 		return spaceBranch{}, false
 	}
 	head := branchHead{Branch: branch}
@@ -232,6 +237,16 @@ func spaceBranchOf(ctx context.Context, cfg config, w workspaceInfo) (spaceBranc
 				}
 			}
 		}
+	}
+	// A branch made from origin/main tracks main until it's pushed: its PR
+	// (if any) is still under its own name, not main's.
+	if isDefault(head.Branch) {
+		head = branchHead{Branch: branch}
+	}
+	// Not pushed anywhere we can tell: then it's the repo's own branch, and a
+	// stranger's fork PR from a branch of the same name isn't its PR.
+	if head.Owner == "" {
+		head.Owner = repo.Owner
 	}
 	return spaceBranch{workspaceID: w.WorkspaceID, repo: repo, head: head}, true
 }
@@ -298,6 +313,11 @@ func tick(ctx context.Context, cfg config, force bool) error {
 	due := map[string][]spaceBranch{} // repo key → spaces
 	for _, sb := range spaces {
 		e, ok := st.Branches[sb.cacheKey()]
+		// After a failure (offline, rate limited), give GitHub the same rest
+		// as a fresh answer gets: events come far more often than that.
+		if failed, ok := st.Failed[sb.repo.key()]; ok && !force && now.Sub(failed) < fresh {
+			continue
+		}
 		if force || !ok || now.Sub(e.Fetched) >= fresh {
 			due[sb.repo.key()] = append(due[sb.repo.key()], sb)
 		}
@@ -319,8 +339,10 @@ func tick(ctx context.Context, cfg config, force bool) error {
 			if err != nil {
 				// Signed out or offline: keep showing what we knew.
 				lookupErr = err
+				st.Failed[repo.key()] = now
 				continue
 			}
+			delete(st.Failed, repo.key())
 			for _, h := range batch {
 				e := branchEntry{Fetched: now}
 				if s, ok := found[h]; ok {
@@ -345,20 +367,27 @@ func tick(ctx context.Context, cfg config, force bool) error {
 			live[p.PaneID] = true
 		}
 		var want map[string]string
+		key := ""
 		if sb, ok := spaces[w.WorkspaceID]; ok {
-			e, known := st.Branches[sb.cacheKey()]
-			if !known {
+			key = sb.cacheKey()
+			e, known := st.Branches[key]
+			switch {
+			case known:
+				want = badgeTokens(e.PR)
+			case st.Reported[w.WorkspaceID].Branch == key || st.Reported[w.WorkspaceID].Branch == "":
 				continue // GitHub couldn't say: leave what's shown
+			default:
+				// The space moved to a branch GitHub hasn't told us about:
+				// what's shown is the old branch's PR, so it goes.
 			}
-			want = badgeTokens(e.PR)
 		}
-		st.report("workspace", w.WorkspaceID, want, w.Tokens, now)
+		st.report("workspace", w.WorkspaceID, want, w.Tokens, now, key)
 		for _, p := range byWS[w.WorkspaceID] {
 			pw := want
 			if p.Agent == "" {
 				pw = nil // only agents are labelled; a shell keeps its own
 			}
-			st.report("pane", p.PaneID, pw, p.Tokens, now)
+			st.report("pane", p.PaneID, pw, p.Tokens, now, key)
 		}
 	}
 	// Forget spaces and panes that are gone, and branches nobody is on.
@@ -384,7 +413,7 @@ func tick(ctx context.Context, cfg config, force bool) error {
 
 // report sends tokens to a space or pane when they differ from what it shows
 // (current, as herdr lists it) or are getting old.
-func (st *labelState) report(kind, id string, want, current map[string]string, now time.Time) {
+func (st *labelState) report(kind, id string, want, current map[string]string, now time.Time, branch string) {
 	ours := map[string]string{}
 	for _, n := range tokenNames {
 		if v, ok := current[n]; ok {
@@ -397,6 +426,8 @@ func (st *labelState) report(kind, id string, want, current map[string]string, n
 		delete(st.Reported, id)
 		return
 	case sameTokens(want, ours) && sent && now.Sub(last.At) < tokenTTL/2:
+		last.Branch = branch
+		st.Reported[id] = last
 		return
 	}
 	params := map[string]any{"source": tokenSource, "tokens": tokenParams(want)}
@@ -416,7 +447,7 @@ func (st *labelState) report(kind, id string, want, current map[string]string, n
 	if want == nil {
 		delete(st.Reported, id)
 	} else {
-		st.Reported[id] = reported{Tokens: want, At: now}
+		st.Reported[id] = reported{Tokens: want, At: now, Branch: branch}
 	}
 }
 
@@ -425,10 +456,10 @@ func clearAll(st labelState, wss []workspaceInfo) error {
 	panes, _ := listPanes("")
 	now := nowFn()
 	for _, w := range wss {
-		st.report("workspace", w.WorkspaceID, nil, w.Tokens, now)
+		st.report("workspace", w.WorkspaceID, nil, w.Tokens, now, "")
 	}
 	for _, p := range panes {
-		st.report("pane", p.PaneID, nil, p.Tokens, now)
+		st.report("pane", p.PaneID, nil, p.Tokens, now, "")
 	}
 	st.Branches = map[string]branchEntry{}
 	return writeLabelState(st)

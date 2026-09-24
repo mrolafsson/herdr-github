@@ -115,6 +115,12 @@ func (s *githubSource) list(ctx context.Context, t tab, cursor string) (page, er
 			}
 		case errors.Is(r.err, errSignedOut) && len(hosts) > 1:
 			errs = append(errs, r.err) // other hosts may still answer
+		case isPartial(r.err):
+			answered = true // what came back shows, with the error
+			errs = append(errs, r.err)
+			if r.next != "" {
+				nexts[r.host] = r.next
+			}
 		default:
 			return out, r.err
 		}
@@ -167,4 +173,9 @@ func (s *githubSource) deleteBranch(ctx context.Context, d *prDetail) error {
 		return errors.New("the branch is already gone")
 	}
 	return s.client(d.Host).deleteRef(ctx, d.HeadRef.ID)
+}
+
+func isPartial(err error) bool {
+	var p *partialError
+	return errors.As(err, &p)
 }

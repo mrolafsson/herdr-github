@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -136,6 +137,9 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if i, ok := m.menuAt(ev.Y); ok {
+		if time.Since(m.menuOpened) < menuClickGuard {
+			return m, nil
+		}
 		return m.chooseMenu(i)
 	}
 	if i, ok := m.rowAt(ev.Y); ok {

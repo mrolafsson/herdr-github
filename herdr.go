@@ -108,10 +108,11 @@ type workspaceInfo struct {
 }
 
 type worktreeInfo struct {
-	Path            string `json:"path"`
-	Branch          string `json:"branch"`
-	Label           string `json:"label"`
-	OpenWorkspaceID string `json:"open_workspace_id"`
+	Path             string `json:"path"`
+	Branch           string `json:"branch"`
+	IsLinkedWorktree bool   `json:"is_linked_worktree"`
+	Label            string `json:"label"`
+	OpenWorkspaceID  string `json:"open_workspace_id"`
 }
 
 // worktreeResult covers both worktree.create and worktree.open replies.

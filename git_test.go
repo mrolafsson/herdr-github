@@ -124,8 +124,8 @@ func (h *fakeHerdr) call(method string, params any, out any) error {
 			return err
 		}
 		var wts []map[string]any
-		for _, block := range strings.Split(strings.TrimSpace(string(out)), "\n\n") {
-			w := map[string]any{}
+		for i, block := range strings.Split(strings.TrimSpace(string(out)), "\n\n") {
+			w := map[string]any{"is_linked_worktree": i > 0} // git lists the main checkout first
 			for _, line := range strings.Split(block, "\n") {
 				k, v, _ := strings.Cut(line, " ")
 				switch k {

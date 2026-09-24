@@ -82,6 +82,9 @@ func (m model) updateDetail(msg tea.Msg) (model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		m.err, m.flash = "", msg.flash
+		if m.cur != nil && m.cur.key() == msg.key {
+			m.curDetail = nil // what's shown is out of date until the reload lands
+		}
 		spawnTick()
 		// The PR changed on GitHub: reload it, and the lists it's in.
 		m, reload := m.reloadLists()
@@ -160,7 +163,13 @@ func (m model) busy(status string, run func() prChangedMsg) (tea.Model, tea.Cmd)
 }
 
 func (m model) toggleDraft() (tea.Model, tea.Cmd) {
-	pr := *m.cur
+	// Go by the PR as just loaded, not the list's copy: after a change, or
+	// from last time's list, that can be out of date.
+	if m.curDetail == nil {
+		m.flash = "Still loading…"
+		return m, nil
+	}
+	pr := m.curDetail.pullRequest
 	if pr.State != "OPEN" {
 		m.err = fmt.Sprintf("#%d is %s.", pr.Number, strings.ToLower(pr.State))
 		return m, nil
@@ -338,7 +347,7 @@ func confirmMerge(d *prDetail, method string, auto bool) *menu {
 		title = fmt.Sprintf("Turn on auto-merge (%s) for #%d? It merges once checks and reviews allow.", strings.ToLower(methodNames[method]), d.Number)
 		yes = "Turn on auto-merge"
 	}
-	return &menu{title: title, items: []menuItem{
+	return &menu{title: title, cursor: 1, items: []menuItem{
 		{label: yes, run: func(m model) (tea.Model, tea.Cmd) {
 			client, ctx, key, repo := m.client, m.ctx, d.key(), d.repo()
 			status := fmt.Sprintf("Merging #%d…", d.Number)
@@ -371,12 +380,13 @@ func (m model) cleanupMenu(d *prDetail) *menu {
 		return nil
 	}
 	deleteBranch := func(m model) error { return m.client.deleteBranch(m.ctx, d) }
+	known := m.checkouts[pr.repo().key()] // read here: the removal runs off the UI's goroutine
 	removeTree := func(m model) error {
 		if d, ok := m.client.(*demoSource); ok {
 			d.removeTree(pr.key())
 			return nil
 		}
-		dir := m.checkouts[pr.repo().key()]
+		dir := known
 		if dir == "" {
 			var err error
 			if dir, err = findCheckout(m.ctx, m.cfg, pr.repo(), m.invoked); err != nil {

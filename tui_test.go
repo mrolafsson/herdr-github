@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -164,7 +165,11 @@ func TestMergeAsksThenOffersCleanup(t *testing.T) {
 	if m.menu == nil || !strings.Contains(m.menu.title, "Squash-merge #482 into main now?") {
 		t.Fatalf("picking a method should ask to confirm: %+v", m.menu)
 	}
-	m = press(m, "enter")
+	// The confirmation starts on Cancel: enter, enter doesn't merge.
+	if m2 := press(m, "enter"); m2.cur.State != "OPEN" {
+		t.Fatal("a second enter merged: the confirmation must start on Cancel")
+	}
+	m = press(m, "1")
 	if m.cur.State != "MERGED" {
 		t.Fatalf("not merged: %q (err %q)", m.cur.State, m.err)
 	}
@@ -207,7 +212,7 @@ func TestBlockedPROffersAutoMerge(t *testing.T) {
 	if m.menu == nil || !strings.HasPrefix(m.menu.items[0].label, "Auto-merge when ready") {
 		t.Fatalf("blocked PR should offer auto-merge: %+v", m.menu)
 	}
-	m = press(m, "enter", "enter")
+	m = press(m, "enter", "1")
 	if m.cur.AutoMergeRequest == nil || !strings.Contains(m.flash, "Auto-merge is on") {
 		t.Fatalf("auto-merge not on: flash=%q err=%q", m.flash, m.err)
 	}
@@ -327,10 +332,25 @@ func TestMouseChoosesMenuItems(t *testing.T) {
 	m := press(demoModel(t, tabMine), "enter", "m")
 	header := m.prHeader()
 	top := 2 + strings.Count(header, "\n") + menuTop
-	next, cmd := m.Update(tea.MouseMsg{X: 6, Y: top + 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-	m = drive(next.(model), cmd)
+	click := func(m model, y int) model {
+		next, cmd := m.Update(tea.MouseMsg{X: 6, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		return drive(next.(model), cmd)
+	}
+	// A click the moment a menu opens is the tail of the click that opened it.
+	if m2 := click(m, top+1); m2.menu == nil || m2.menu.title != m.menu.title {
+		t.Fatal("a click right as the menu opened was taken as a choice")
+	}
+	m.menuOpened = time.Now().Add(-time.Second)
+	m = click(m, top+1)
 	if m.menu == nil || !strings.Contains(m.menu.title, "Merge #482 into main now?") {
 		t.Fatalf("clicking the second method should ask to confirm a merge commit: %+v", m.menu)
+	}
+	// Double-clicking the first method never reaches "yes".
+	m = press(demoModel(t, tabMine), "enter", "m")
+	m.menuOpened = time.Now().Add(-time.Second)
+	m = click(click(m, top), top)
+	if m.cur.State != "OPEN" {
+		t.Fatal("a double-click merged")
 	}
 }
 
@@ -385,7 +405,7 @@ func TestDemoTouchesNothing(t *testing.T) {
 	old := herdrCallFn
 	herdrCallFn = func(string, any, any) error { calls++; return errors.New("no") }
 	defer func() { herdrCallFn = old }()
-	m := press(demoModel(t, tabMine), "enter", "w", "s", "d", "d", "m", "enter", "enter", "enter")
+	m := press(demoModel(t, tabMine), "enter", "w", "s", "d", "d", "m", "enter", "1", "enter")
 	if calls != 0 || m.err != "" {
 		t.Fatalf("demo called herdr %d times (err %q)", calls, m.err)
 	}
