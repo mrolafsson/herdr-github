@@ -1,0 +1,10 @@
+{
+  "hosts": ["github.com"],
+  "repos": { "acme/app": "~/work/app" },
+  "clone_root": "~/code",
+  "start_prompt": "/review-pr {url}",
+  "agent_wait_seconds": 90,
+  "labels": true,
+  "label_refresh_seconds": 60,
+  "theme": "dark"
+}

@@ -1,0 +1,277 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/charmbracelet/x/ansi"
+)
+
+// shorten fits s into n terminal cells, not n characters: a CJK character or
+// an emoji takes two cells.
+func shorten(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(s) <= n {
+		return s
+	}
+	return strings.TrimRight(ansi.Truncate(s, n-1, ""), " ") + "…"
+}
+
+// localBranch is the branch a PR is checked out on. A PR from the repo
+// itself uses its own branch name, so pushing just works; one from a fork
+// gets the fork owner in front ("alice/fix-typo"), since two forks can use
+// the same branch name and neither should clobber your own branch.
+func localBranch(pr pullRequest) string {
+	if pr.IsCrossRepository {
+		return pr.headOwner() + "/" + pr.HeadRefName
+	}
+	return pr.HeadRefName
+}
+
+func worktreeLabel(pr pullRequest) string {
+	return shorten(fmt.Sprintf("#%d %s", pr.Number, pr.Title), 48)
+}
+
+// Seams for tests: the herdr side of doWorktree.
+var (
+	openWorktreeFn = openWorktree
+	spawnKickoffFn = spawnKickoff
+)
+
+// openWorktree focuses the PR's worktree in checkout dir, creating it when
+// there is none. It returns the workspace and, for a new worktree, its root
+// pane.
+//
+// A new one starts from the PR's head as GitHub has it right now: fetched
+// from the base repo's remote, by branch for a PR from the repo itself and by
+// refs/pull/N/head for one from a fork. A fork's branch is then set to pull
+// from and push to the fork (as `gh pr checkout` does), which works when the
+// author lets maintainers edit.
+func openWorktree(ctx context.Context, pr pullRequest, dir string) (*worktreeResult, bool, error) {
+	branch := localBranch(pr)
+	existing, err := listWorktrees(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, w := range existing {
+		if strings.TrimPrefix(w.Branch, "refs/heads/") == branch {
+			var res worktreeResult
+			err := herdrCall("worktree.open", map[string]any{"cwd": dir, "path": w.Path, "label": worktreeLabel(pr), "focus": true}, &res)
+			return &res, false, err
+		}
+	}
+
+	rem, ok := remoteFor(ctx, dir, pr.repo())
+	if !ok {
+		return nil, false, fmt.Errorf("%s has no remote for %s", dir, pr.repo())
+	}
+	// The fetch goes into a remote-tracking ref of our own naming for a
+	// fork's PR, never into a local branch that might hold your work.
+	src, dst := "refs/heads/"+pr.HeadRefName, "refs/remotes/"+rem.Name+"/"+pr.HeadRefName
+	if pr.IsCrossRepository {
+		src, dst = fmt.Sprintf("refs/pull/%d/head", pr.Number), fmt.Sprintf("refs/remotes/%s/pr/%d", rem.Name, pr.Number)
+	}
+	fctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	_, fetchErr := git(fctx, dir, "fetch", "--quiet", "--no-tags", rem.Name, "+"+src+":"+dst)
+	cancel()
+
+	params := map[string]any{"cwd": dir, "branch": branch, "label": worktreeLabel(pr), "focus": true}
+	_, haveLocal := git(ctx, dir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	switch {
+	case haveLocal == nil:
+		// A branch of that name already exists (its worktree was removed,
+		// say): check it out as it is rather than lose commits on it.
+	case fetchErr != nil:
+		return nil, false, fmt.Errorf("couldn't fetch #%d from %s: %v", pr.Number, rem.Name, fetchErr)
+	default:
+		params["base"] = strings.TrimPrefix(dst, "refs/remotes/")
+	}
+	var res worktreeResult
+	if err := herdrCall("worktree.create", params, &res); err != nil {
+		return nil, false, err
+	}
+	if haveLocal != nil && res.Worktree.Path != "" {
+		trackHead(ctx, res.Worktree.Path, pr, rem, branch)
+	}
+	return &res, true, nil
+}
+
+// trackHead points a new branch at the PR's head branch, so `git pull` and
+// `git push` go to the right place. Best effort: the worktree is usable
+// without it.
+func trackHead(ctx context.Context, path string, pr pullRequest, rem remote, branch string) {
+	if !pr.IsCrossRepository {
+		_, _ = git(ctx, path, "branch", "--set-upstream-to="+rem.Name+"/"+pr.HeadRefName, branch)
+		return
+	}
+	if pr.HeadRepository == nil { // the fork is gone
+		return
+	}
+	forkURL := forkRemoteURL(rem.URL, pr.Host, pr.HeadRepository.NameWithOwner)
+	_, _ = git(ctx, path, "config", "branch."+branch+".remote", forkURL)
+	_, _ = git(ctx, path, "config", "branch."+branch+".merge", "refs/heads/"+pr.HeadRefName)
+}
+
+// forkRemoteURL spells the fork's URL the way the base remote is spelled, so
+// it authenticates the same way (SSH key or HTTPS credential helper).
+func forkRemoteURL(baseURL, host, nameWithOwner string) string {
+	if strings.HasPrefix(baseURL, "https://") || strings.HasPrefix(baseURL, "http://") {
+		return "https://" + host + "/" + nameWithOwner + ".git"
+	}
+	if strings.HasPrefix(baseURL, "ssh://") {
+		return "ssh://git@" + host + "/" + nameWithOwner + ".git"
+	}
+	return "git@" + host + ":" + nameWithOwner + ".git"
+}
+
+// doWorktree opens (or creates) the PR's worktree; with start, a new
+// worktree's agent is also handed its first prompt. Only a new one: an
+// existing worktree's agent may be in the middle of something.
+func doWorktree(ctx context.Context, cfg config, pr pullRequest, dir string, start bool) actionDoneMsg {
+	res, created, err := openWorktreeFn(ctx, pr, dir)
+	if err != nil {
+		return actionDoneMsg{err: err}
+	}
+	spawnTick()
+	if !start {
+		return actionDoneMsg{}
+	}
+	if !created {
+		return actionDoneMsg{note: fmt.Sprintf("#%d's worktree already existed, so no prompt was sent: its agent may be busy.", pr.Number)}
+	}
+	if res.RootPane == nil || res.RootPane.PaneID == "" {
+		return actionDoneMsg{note: "Worktree created, but herdr didn't say which pane is the new worktree's, so no prompt was sent."}
+	}
+	if err := spawnKickoffFn(res.Workspace.WorkspaceID, res.RootPane.PaneID, expandPrompt(cfg.StartPrompt, pr)); err != nil {
+		return actionDoneMsg{note: "Worktree created, but the prompt couldn't be queued: " + err.Error()}
+	}
+	return actionDoneMsg{}
+}
+
+func expandPrompt(tmpl string, pr pullRequest) string {
+	return strings.NewReplacer(
+		"{number}", fmt.Sprint(pr.Number), "{url}", pr.URL, "{repo}", pr.Repository.NameWithOwner,
+		"{branch}", pr.HeadRefName, "{title}", pr.Title,
+	).Replace(tmpl)
+}
+
+// removeWorktree removes the PR's worktree after a merge: through herdr when
+// a space has it open (which closes the space), else with git. Neither
+// forces: uncommitted changes keep the worktree where it is.
+func removeWorktree(ctx context.Context, pr pullRequest, dir string) error {
+	ws, err := listWorktrees(dir)
+	if err != nil {
+		return err
+	}
+	branch := localBranch(pr)
+	for _, w := range ws {
+		if strings.TrimPrefix(w.Branch, "refs/heads/") != branch {
+			continue
+		}
+		if w.OpenWorkspaceID != "" {
+			return herdrCall("worktree.remove", map[string]any{"workspace_id": w.OpenWorkspaceID}, nil)
+		}
+		if out, err := exec.CommandContext(ctx, "git", "-C", dir, "worktree", "remove", w.Path).CombinedOutput(); err != nil {
+			return errors.New(strings.TrimSpace(clean(string(out), false)))
+		}
+		return nil
+	}
+	return errors.New("its worktree is already gone")
+}
+
+// ── detached helpers ──────────────────────────────────────────────────────────
+
+// spawnDetached runs this binary with args in its own session, so it outlives
+// the popup that started it. Output goes to a small log in the state dir.
+func spawnDetached(stdin string, args ...string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(stateDir(), 0o700); err != nil {
+		return err
+	}
+	logPath := stateDir() + "/background.log"
+	if fi, err := os.Stat(logPath); err == nil && fi.Size() > 256<<10 {
+		_ = os.Rename(logPath, logPath+".old") // keep the log small: one generation back
+	}
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer logf.Close()
+	cmd := exec.Command(self, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	cmd.Stdout, cmd.Stderr = logf, logf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+// spawnTickFn refreshes the sidebar labels in the background after the
+// popup changed something; a seam for tests and the demo.
+var spawnTickFn = func() { _ = spawnDetached("", "tick", "--force") }
+
+func spawnTick() { spawnTickFn() }
+
+// spawnKickoff runs `kickoff` detached. The prompt goes over stdin, not argv:
+// any local user can list another process's arguments.
+func spawnKickoff(workspaceID, rootPaneID, text string) error {
+	return spawnDetached(text, "kickoff", workspaceID, rootPaneID)
+}
+
+// kickoff waits for an agent to come up in the new worktree's own pane (your
+// worktree template starts it) and be ready for input, then sends the prompt.
+// An approval or trust dialog is waited out: that's yours to answer.
+func kickoff(cfg config, workspaceID, rootPaneID, text string) error {
+	deadline := time.Now().Add(time.Duration(cfg.AgentWaitSeconds) * time.Second)
+	for time.Now().Before(deadline) {
+		panes, err := listPanes(workspaceID)
+		if err != nil {
+			return err
+		}
+		if p := agentPane(panes, rootPaneID); p != nil && (p.AgentStatus == "idle" || p.AgentStatus == "done") {
+			err := herdrCall("agent.prompt", map[string]any{
+				"target": p.PaneID, "text": text,
+				"wait": map[string]any{"timeout_ms": 8000, "until": []string{"working", "blocked"}},
+			}, nil)
+			switch {
+			case err == nil:
+				fmt.Println(time.Now().Format(time.RFC3339), "prompt sent to", p.PaneID)
+				return nil
+			case isHerdrCode(err, "agent_prompt_stalled"), isHerdrCode(err, "timeout"):
+				// It may still be sitting in the input box: resending could
+				// duplicate it, so stop here and say so.
+				notify("GitHub", "Typed the prompt but the agent didn't start. Press enter in the new space.")
+				return err
+			case isHerdrCode(err, "agent_blocked"):
+				// A dialog came up: wait for it to be answered.
+			default:
+				return err
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	notify("GitHub", "No agent came up in the new space, so the PR prompt wasn't sent.")
+	return errors.New("no ready agent before the deadline")
+}
+
+// agentPane is the new worktree's own pane, once an agent runs in it.
+func agentPane(panes []paneInfo, rootPaneID string) *paneInfo {
+	for i := range panes {
+		if p := &panes[i]; p.PaneID == rootPaneID && p.Agent != "" {
+			return p
+		}
+	}
+	return nil
+}

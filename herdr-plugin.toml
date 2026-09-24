@@ -1,0 +1,75 @@
+id = "herdr-github"
+name = "GitHub"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Your pull requests in a herdr popup: merge readiness, checks, reviews and the conversation; toggle draft, merge (or auto-merge), and one key to a worktree for any PR, forks included. Every space and agent gets its branch's PR as a sidebar label. Uses gh's sign-in."
+platforms = ["macos"]
+
+# Builds ./bin/herdr-github from source with Go, or downloads the release
+# binary for this version when Go isn't installed.
+[[build]]
+command = ["sh", "scripts/build.sh"]
+
+# Bind it to a key in ~/.config/herdr/config.toml:
+#   [[keys.command]]
+#   key = "prefix+alt+g"
+#   type = "plugin_action"
+#   command = "herdr-github.open"
+[[actions]]
+id = "open"
+title = "GitHub: pull requests"
+description = "Your PRs, the ones waiting on your review, and this repo's: open one, merge it, or jump to its worktree."
+contexts = ["global", "workspace", "pane"]
+command = ["./bin/herdr-github", "action", "open"]
+
+[[actions]]
+id = "demo"
+title = "GitHub: demo (fictional org)"
+description = "The picker on made-up data: try it without an account, or take screenshots without showing real work."
+contexts = ["global"]
+command = ["./bin/herdr-github", "action", "demo"]
+
+[[actions]]
+id = "labels"
+title = "GitHub: refresh PR labels"
+description = "Ask GitHub now for every space's PR status, instead of waiting for the next refresh."
+contexts = ["global", "workspace"]
+command = ["./bin/herdr-github", "action", "labels"]
+
+# The picker, opened by the actions above with the invoking space's directory
+# (or the demo flag) in its env.
+[[panes]]
+id = "picker"
+title = "GitHub"
+placement = "popup"
+command = ["./bin/herdr-github", "picker"]
+
+# Sidebar labels. `tick` sets the $pr, $pr_badge, $pr_state, $pr_checks and
+# $pr_review tokens on each space (and its agents) from its branch's PR. It
+# returns at once when it ran moments ago, and only asks GitHub about a repo
+# whose answer is older than label_refresh_seconds (60 by default).
+[[startup]]
+command = ["./bin/herdr-github", "tick", "--force"]
+
+# Switching space or pane: the cheapest moment to catch up.
+[[events]]
+on = "pane.focused"
+command = ["./bin/herdr-github", "tick"]
+
+# An agent finishing is often a push, so the PR's checks are about to move.
+[[events]]
+on = "pane.agent_status_changed"
+command = ["./bin/herdr-github", "tick"]
+
+# A new space, or a worktree opened into one: label it straight away.
+[[events]]
+on = "workspace.created"
+command = ["./bin/herdr-github", "tick"]
+
+[[events]]
+on = "worktree.created"
+command = ["./bin/herdr-github", "tick"]
+
+[[events]]
+on = "worktree.opened"
+command = ["./bin/herdr-github", "tick"]
