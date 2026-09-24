@@ -102,12 +102,19 @@ bin/herdr-github picker --demo
 |----------------------|---------------------------------------------------------------|
 | **Mine**             | your open PRs across every repo, grouped by repo              |
 | **Review requested** | open PRs asking for your review (or your team's)              |
-| **this repo**        | every open PR in the repo you opened the popup from, drafts last |
+| **this repo**        | every open PR in the repo you opened the popup from, drafts last; **ctrl+t** picks another |
 
 Rows show the state (`●` open, `◌` draft), the number and title, then
 `conflicts` / `changes` / `approved`, `auto` if auto-merge is on, the checks
 (`✓` passed, `✗` failed, `●` running) and `⌥` if the worktree exists. The
 popup reopens on the tab you left.
+
+**Another repo.** The third tab starts on the repo of the space you opened
+the popup from. **ctrl+t** (or a click on that tab while you're on it) opens
+a picker: this space's repo, the ones you picked lately, every herdr space's
+repo, and the repos your PRs are in. Type to filter, or type any
+`owner/repo` (or `host/owner/repo`) to open that one. The pick lasts for the
+popup; next time it opens on the space's repo again.
 
 **Type to filter**: every word must match the number, title, repo, author,
 branch or a label, so `sync bug` finds *#482 Offline edits…*.
@@ -126,6 +133,7 @@ as they arrive; long lists fill in page by page (`Mine 20+`).
 | ctrl+w             | open or create its worktree              |
 | ctrl+s             | start: worktree, and a prompt for its agent |
 | ctrl+o             | open on GitHub                           |
+| ctrl+t             | pick the repo tab's repo                 |
 | ctrl+r             | refresh                                  |
 | tab, ← →           | switch tabs                              |
 | esc                | clear the filter, then close             |
@@ -343,7 +351,7 @@ PR's branch.
 readable only by you: `lists.json` (the last lists, shown while fresh ones
 load: numbers, titles, branches, states), `labels.json` (each branch's PR
 status, for the labels), `prefs.json` (your last tab, your merge method per
-repo) and the background log.
+repo, repos you picked lately) and the background log.
 
 **Text from GitHub.** Titles, bodies, comments, names and labels are written
 by other people, so every string has terminal escape sequences and control
@@ -412,6 +420,7 @@ with the invoking space's directory; the popup is the same binary running a
 | `labels.go`    | the sidebar tokens (`tick`)                            |
 | `tui.go`       | lists, tabs, filter, menus                             |
 | `detail.go`    | the PR screen, draft, merge and clean-up               |
+| `repopicker.go` | the repo tab's repo picker                            |
 | `cache.go`, `prefs.go` | the lists from last time, remembered choices   |
 | `markdown.go`, `sanitize.go`, `theme.go`, `mouse.go` | rendering, safety, colours, mouse |
 | `demo.go`      | the fictional demo org                                 |

@@ -413,3 +413,81 @@ func TestDemoTouchesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRepoPickerSwitchesTheRepoTab(t *testing.T) {
+	m := demoModel(t, tabRepo)
+	if !strings.Contains(plain(m), "notes-app 7") || !strings.Contains(plain(m), "^t repo") {
+		t.Fatalf("repo tab:\n%s", plain(m))
+	}
+	m = press(m, "ctrl+t")
+	if m.menu == nil || !m.menu.filterable {
+		t.Fatal("ctrl+t should open the repo picker")
+	}
+	v := plain(m)
+	for _, want := range []string{"halcyon/notes-app", "this space · showing", "halcyon/sync-server", "halcyon/design-system"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("picker lacks %q:\n%s", want, v)
+		}
+	}
+	// Typing filters; digits are text here, not shortcuts.
+	for _, r := range "sync" {
+		m = press(m, string(r))
+	}
+	if items := m.menuItems(); len(items) != 1 || items[0].label != "halcyon/sync-server" {
+		t.Fatalf("filter: %+v", items)
+	}
+	m = press(m, "enter")
+	if m.repo == nil || m.repo.Name != "sync-server" || m.tab != tabRepo {
+		t.Fatalf("switched to %+v", m.repo)
+	}
+	if v := plain(m); !strings.Contains(v, "sync-server 1") || !strings.Contains(v, "Return merge proposals") || strings.Contains(v, "Offline edits") {
+		t.Fatalf("repo tab after switching:\n%s", v)
+	}
+	// The space's own repo is still the one marked as this space's.
+	m = press(m, "ctrl+t")
+	if !strings.Contains(plain(m), "halcyon/notes-app") || m.home.Name != "notes-app" {
+		t.Fatal("the space's repo should stay first")
+	}
+}
+
+func TestRepoPickerTakesATypedRepo(t *testing.T) {
+	m := press(demoModel(t, tabRepo), "ctrl+t")
+	for _, r := range "cli/cli" {
+		m = press(m, string(r))
+	}
+	items := m.menuItems()
+	if len(items) != 1 || items[0].label != "cli/cli" || items[0].detail != "as typed" {
+		t.Fatalf("typed repo: %+v", items)
+	}
+	if _, ok := typedRepo("ghe.example.com/o/r", "github.com"); !ok {
+		t.Fatal("host/owner/repo")
+	}
+	for _, bad := range []string{"o", "o/r/x", "o r/x", "../x", "o/"} {
+		if _, ok := typedRepo(bad, "github.com"); ok && bad != "../x" {
+			t.Errorf("typedRepo(%q) accepted", bad)
+		}
+	}
+	// A reply for the repo the tab showed before switching is dropped.
+	m = press(demoModel(t, tabRepo), "ctrl+t")
+	old := m.repo.key()
+	for _, r := range "sync" {
+		m = press(m, string(r))
+	}
+	next, _ := m.Update(keyMsg("enter"))
+	m = next.(model)
+	late, _ := m.Update(listMsg{tab: tabRepo, repo: old, prs: prsNumbered(99), gen: m.gen})
+	if strings.Contains(plain(late.(model)), "PR 99") {
+		t.Fatal("the old repo's late reply was shown as the new one's")
+	}
+}
+
+func TestClickingTheRepoTabYoureOnPicksARepo(t *testing.T) {
+	m := demoModel(t, tabRepo)
+	labels := m.tabLabels()
+	x := len([]rune(labels[0])) + 1 + len([]rune(labels[1])) + 1 + 2
+	next, cmd := m.Update(tea.MouseMsg{X: x, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = drive(next.(model), cmd)
+	if m.menu == nil || !m.menu.filterable {
+		t.Fatal("clicking the active repo tab should open the picker")
+	}
+}

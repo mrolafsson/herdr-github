@@ -53,7 +53,8 @@ func fakeGitHub(t *testing.T, h http.HandlerFunc) {
 func demoModel(t *testing.T, tb tab) model {
 	t.Helper()
 	d := newDemoSource()
-	m := newModel(context.Background(), withDefaults(config{}), d, "", &d.home)
+	home := d.homeRepo()
+	m := newModel(context.Background(), withDefaults(config{}), d, "", &home)
 	m.width, m.height, m.tab = 110, 34, tb
 	// A blinking cursor is a timer that never ends; drive would wait on it.
 	m.filter.Cursor.SetMode(cursor.CursorStatic)
@@ -63,7 +64,7 @@ func demoModel(t *testing.T, tb tab) model {
 		if err != nil {
 			t.Fatal(err)
 		}
-		next, _ := m.Update(listMsg{tab: x, prs: p.prs, gen: m.gen})
+		next, _ := m.Update(listMsg{tab: x, repo: d.home.key(), prs: p.prs, gen: m.gen})
 		m = next.(model)
 	}
 	next, _ := m.Update(worktreesMsg{marks: d.worktreeMarks(), gen: m.gen})

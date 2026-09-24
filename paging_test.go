@@ -101,3 +101,15 @@ func TestListCacheRoundTrip(t *testing.T) {
 		t.Fatalf("other repo: %+v", got)
 	}
 }
+
+func TestFirstPageIsGroupedToo(t *testing.T) {
+	prs := prsNumbered(1, 2)
+	prs[0].IsDraft = true // GitHub's order: the draft was updated last
+	m := newModel(context.Background(), withDefaults(config{}), &pagedSource{}, "", &repoRef{"github.com", "o", "r"})
+	m.width, m.height, m.tab = 100, 30, tabRepo
+	next, _ := m.Update(listMsg{tab: tabRepo, repo: "github.com/o/r", prs: prs, gen: m.gen})
+	v := plain(next.(model))
+	if strings.Index(v, "Drafts") < strings.Index(v, "Open") {
+		t.Fatalf("drafts before open on the first page:\n%s", v)
+	}
+}

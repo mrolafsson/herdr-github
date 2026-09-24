@@ -76,6 +76,8 @@ func keyMsg(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlR}
 	case "ctrl+w":
 		return tea.KeyMsg{Type: tea.KeyCtrlW}
+	case "ctrl+t":
+		return tea.KeyMsg{Type: tea.KeyCtrlT}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 }
@@ -110,7 +112,7 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		switch {
 		case m.menu != nil:
-			m.menuCursor = min(max(0, m.menuCursor+delta), len(m.menu.items)-1)
+			m.menuCursor = max(0, min(m.menuCursor+delta, len(m.menuItems())-1))
 		case m.screen == screenList:
 			m.move(delta)
 		default:
@@ -172,8 +174,9 @@ func (m model) menuAt(y int) (int, bool) {
 		header := m.prHeader()
 		top, room = 2+strings.Count(header, "\n"), m.bodyRoomFor(header) // tabs, blank, header
 	}
-	i := y - top - menuTop
-	if i < 0 || i >= len(m.menu.items) || i >= room-menuTop {
+	row := y - top - menuTop
+	i := m.menuStart(room) + row
+	if row < 0 || row >= room-menuTop || i >= len(m.menuItems()) {
 		return 0, false
 	}
 	return i, true
@@ -186,8 +189,13 @@ func (m model) clickTab(x int) (tea.Model, tea.Cmd) {
 	for i, l := range m.tabLabels() {
 		w := lipgloss.Width(l)
 		if x >= pos && x < pos+w {
+			onList := m.screen == screenList
 			m.screen, m.err, m.flash, m.curDetail = screenList, "", "", nil
 			if tab(i) == m.tab {
+				// Clicking the repo tab you're on picks another repo.
+				if onList && tab(i) == tabRepo {
+					return m.openRepoPicker()
+				}
 				m.clampCursor()
 				return m, nil
 			}

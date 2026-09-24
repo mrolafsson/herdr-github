@@ -226,6 +226,29 @@ func rollupOf(cs []check) rollup {
 	return r
 }
 
+func (d *demoSource) homeRepo() repoRef {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.home
+}
+
+func (d *demoSource) setHome(r repoRef) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.home = r
+}
+
+// repos are the demo org's repos, as if each had a herdr space.
+func (d *demoSource) repos() []repoRef {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []repoRef
+	for _, p := range d.prs {
+		out = append(out, p.repo())
+	}
+	return out
+}
+
 func (d *demoSource) find(key string) *prDetail {
 	for _, p := range d.prs {
 		if p.key() == key {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // prefs.json remembers small choices between popups: the merge method you
@@ -11,6 +12,7 @@ import (
 type prefs struct {
 	MergeMethods map[string]string `json:"merge_methods"` // repo key → MERGE, SQUASH, REBASE
 	Tab          *int              `json:"tab"`
+	RecentRepos  []string          `json:"recent_repos"` // repo keys picked in the repo tab, latest first
 }
 
 func prefsPath() string { return filepath.Join(stateDir(), "prefs.json") }
@@ -62,4 +64,18 @@ func lastTab() (tab, bool) {
 		return tab(*p.Tab), true
 	}
 	return tabMine, false
+}
+
+// rememberRecentRepo puts r first among the repos the picker offers.
+func rememberRecentRepo(r repoRef) {
+	updatePrefs(func(p *prefs) {
+		name := r.Host + "/" + r.Owner + "/" + r.Name // as spelled, for showing
+		out := []string{name}
+		for _, k := range p.RecentRepos {
+			if !strings.EqualFold(k, name) && len(out) < 8 {
+				out = append(out, k)
+			}
+		}
+		p.RecentRepos = out
+	})
 }

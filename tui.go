@@ -31,6 +31,7 @@ const (
 // after a refresh or sign-in is dropped rather than shown over newer data.
 type listMsg struct {
 	tab    tab
+	repo   string // the repo tab's repo it's for (key)
 	cursor string // the page asked for: "" is the first
 	prs    []pullRequest
 	next   string // the page after, "" at the end
@@ -158,7 +159,8 @@ type model struct {
 	client  source
 	demo    bool
 	invoked string   // cwd of the space the picker was opened from
-	repo    *repoRef // its GitHub repo, if it is one
+	home    *repoRef // its GitHub repo, if it is one
+	repo    *repoRef // the repo tab's repo: home, unless another was picked
 	gen     int
 	width   int
 	height  int
@@ -205,7 +207,7 @@ func newModel(ctx context.Context, cfg config, client source, invoked string, re
 	sp.Spinner = spinner.MiniDot
 	_, demo := client.(*demoSource)
 	return model{
-		ctx: ctx, cfg: cfg, client: client, demo: demo, invoked: invoked, repo: repo,
+		ctx: ctx, cfg: cfg, client: client, demo: demo, invoked: invoked, home: repo, repo: repo,
 		mode: modeLoading, filter: ti, spin: sp,
 		prs: map[tab][]pullRequest{}, loaded: map[tab]bool{}, stale: map[tab]bool{},
 		paging: map[tab]bool{}, tabErr: map[tab]string{},
@@ -253,10 +255,14 @@ func (m model) loadAll() tea.Cmd {
 
 func (m model) loadTab(t tab, cursor string) tea.Cmd {
 	client, ctx, gen := m.client, m.ctx, m.gen
+	repo := ""
+	if t == tabRepo && m.repo != nil {
+		repo = m.repo.key()
+	}
 	return func() tea.Msg {
 		debugf("loadTab start tab=%d cursor=%q", t, cursor)
 		p, err := client.list(ctx, t, cursor)
-		return listMsg{tab: t, cursor: cursor, prs: p.prs, next: p.next, err: err, gen: gen}
+		return listMsg{tab: t, repo: repo, cursor: cursor, prs: p.prs, next: p.next, err: err, gen: gen}
 	}
 }
 
@@ -361,6 +367,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.gen {
 			return m, nil
 		}
+		if msg.tab == tabRepo && (m.repo == nil || msg.repo != m.repo.key()) {
+			return m, nil // for a repo that's no longer the one picked
+		}
 		t := msg.tab
 		if msg.tab == m.tab && m.mode == modeLoading {
 			m.mode = modeList
@@ -377,11 +386,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		keep := m.selectedKey()
 		if msg.cursor == "" {
-			m.prs[t] = msg.prs
+			m.prs[t] = append([]pullRequest(nil), msg.prs...)
 		} else {
 			m.prs[t] = mergePRs(m.prs[t], msg.prs)
-			sortPRs(m.prs[t], t)
 		}
+		sortPRs(m.prs[t], t) // GitHub sorts by update; the tab groups too
 		m.loaded[t], m.stale[t], m.tabErr[t] = true, false, ""
 		if msg.err != nil {
 			m.tabErr[t] = msg.err.Error() // usable, but not complete
@@ -419,6 +428,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case noteMsg:
 		m.err = string(msg)
 		return m, nil
+
+	case repoChoicesMsg:
+		if m.mode == modeSignedOut || m.menu != nil {
+			return m, nil
+		}
+		return m.openMenu(m.repoMenu(msg)), nil
 
 	case loginDoneMsg:
 		if msg.err != nil {
@@ -553,6 +568,8 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.openURL(r.pr.URL)
 		}
 		return m, nil
+	case "ctrl+t":
+		return m.openRepoPicker()
 	case "enter":
 		if r := m.selected(); r != nil {
 			return m.openPR(*r.pr)
@@ -869,7 +886,7 @@ func (m model) emptyText() string {
 	case m.tab == tabReview:
 		return "Nobody is waiting on your review."
 	case m.repo == nil:
-		return "Open this from a space inside a GitHub repo to see its pull requests."
+		return "Press ctrl+t to pick a repo, or open this from a space inside one."
 	}
 	return "No open pull requests in " + m.repo.String() + "."
 }
@@ -1026,20 +1043,27 @@ func (m model) currentFooter() []hint {
 	case m.screen != screenList:
 		return m.detailFooter()
 	}
-	return []hint{
-		{"enter details", "enter"}, {"^w worktree", "ctrl+w"}, {"^s start", "ctrl+s"},
-		{"^o open", "ctrl+o"}, {"^r refresh", "ctrl+r"}, {"tab switch", "tab"}, {"esc close", "esc"},
+	hs := []hint{{"enter details", "enter"}, {"^w worktree", "ctrl+w"}, {"^s start", "ctrl+s"}, {"^o open", "ctrl+o"}}
+	if m.tab == tabRepo {
+		hs = append(hs, hint{"^t repo", "ctrl+t"})
 	}
+	return append(hs, hint{"^r refresh", "ctrl+r"}, hint{"tab switch", "tab"}, hint{"esc close", "esc"})
 }
 
 // ── menus ─────────────────────────────────────────────────────────────────────
 
 // menu is a short list of choices shown over the current screen: how to
-// merge, what to clean up afterwards, whether to clone.
+// merge, what to clean up afterwards, whether to clone, which repo.
 type menu struct {
 	title  string
 	items  []menuItem
 	cursor int // where the cursor starts: a confirmation starts on Cancel
+
+	// A filterable menu takes typing as a filter over its items (and then
+	// has no number shortcuts); typed may add an item for what was typed.
+	filterable bool
+	query      string
+	typed      func(q string) *menuItem
 }
 
 type menuItem struct {
@@ -1057,30 +1081,87 @@ func (m model) openMenu(mn *menu) model {
 // double-click must not land on what appeared under it (a merge's "yes").
 var menuClickGuard = 400 * time.Millisecond
 
+// menuItems are the items shown: all of them, or those matching the filter.
+func (m model) menuItems() []menuItem {
+	mn := m.menu
+	if mn == nil {
+		return nil
+	}
+	if !mn.filterable || mn.query == "" {
+		return mn.items
+	}
+	var out []menuItem
+	for _, it := range mn.items {
+		hay := strings.ToLower(it.label + " " + it.detail)
+		ok := true
+		for _, w := range strings.Fields(strings.ToLower(mn.query)) {
+			ok = ok && strings.Contains(hay, w)
+		}
+		if ok {
+			out = append(out, it)
+		}
+	}
+	if mn.typed != nil {
+		if it := mn.typed(mn.query); it != nil {
+			out = append(out, *it)
+		}
+	}
+	return out
+}
+
 func (m model) handleMenuKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	n := len(m.menu.items)
+	n := len(m.menuItems())
 	switch s := k.String(); s {
-	case "esc", "q":
-		m.menu = nil
-	case "up", "k", "ctrl+p":
+	case "esc":
+		if m.menu.filterable && m.menu.query != "" {
+			m.setMenuQuery("")
+		} else {
+			m.menu = nil
+		}
+	case "up", "ctrl+p":
 		m.menuCursor = max(0, m.menuCursor-1)
-	case "down", "j", "ctrl+n":
-		m.menuCursor = min(n-1, m.menuCursor+1)
+	case "down", "ctrl+n":
+		m.menuCursor = max(0, min(n-1, m.menuCursor+1))
 	case "enter":
 		return m.chooseMenu(m.menuCursor)
+	case "backspace":
+		if m.menu.filterable && m.menu.query != "" {
+			q := []rune(m.menu.query)
+			m.setMenuQuery(string(q[:len(q)-1]))
+		}
 	default:
-		if len(s) == 1 && s[0] >= '1' && s[0] <= '9' && int(s[0]-'1') < n {
+		switch {
+		case m.menu.filterable:
+			if k.Type == tea.KeyRunes || k.Type == tea.KeySpace {
+				m.setMenuQuery(m.menu.query + string(k.Runes))
+			}
+		case s == "q":
+			m.menu = nil
+		case s == "k":
+			m.menuCursor = max(0, m.menuCursor-1)
+		case s == "j":
+			m.menuCursor = min(n-1, m.menuCursor+1)
+		case len(s) == 1 && s[0] >= '1' && s[0] <= '9' && int(s[0]-'1') < n:
 			return m.chooseMenu(int(s[0] - '1'))
 		}
 	}
 	return m, nil
 }
 
+// setMenuQuery changes a filterable menu's filter. The menu is copied, not
+// changed in place: models are values, and an older copy may still hold it.
+func (m *model) setMenuQuery(q string) {
+	mn := *m.menu
+	mn.query = q
+	m.menu, m.menuCursor = &mn, 0
+}
+
 func (m model) chooseMenu(i int) (tea.Model, tea.Cmd) {
-	if m.menu == nil || i < 0 || i >= len(m.menu.items) {
+	items := m.menuItems()
+	if i < 0 || i >= len(items) {
 		return m, nil
 	}
-	it := m.menu.items[i]
+	it := items[i]
 	m.menu = nil
 	return it.run(m)
 }
@@ -1089,14 +1170,33 @@ func (m model) chooseMenu(i int) (tea.Model, tea.Cmd) {
 // menu's own block: the title and a blank line.
 const menuTop = 2
 
+// menuStart is the first item shown, so the cursor stays in view.
+func (m model) menuStart(room int) int {
+	if vis := room - menuTop; vis > 0 && m.menuCursor >= vis {
+		return m.menuCursor - vis + 1
+	}
+	return 0
+}
+
 func (m model) viewMenu(room int) string {
 	var b strings.Builder
-	b.WriteString(" " + styleHeader.Render(shorten(m.menu.title, max(10, m.width-2))) + "\n\n")
-	for i, it := range m.menu.items {
-		if i >= room-menuTop {
-			break
+	title := m.menu.title
+	if m.menu.filterable {
+		title += " › " + m.menu.query + "▏"
+	}
+	b.WriteString(" " + styleHeader.Render(shorten(title, max(10, m.width-2))) + "\n\n")
+	items := m.menuItems()
+	if len(items) == 0 {
+		b.WriteString(styleDim.Render("   Nothing matches.") + "\n")
+	}
+	start := m.menuStart(room)
+	for i := start; i < len(items) && i-start < room-menuTop; i++ {
+		it := items[i]
+		num := fmt.Sprint(i + 1)
+		if m.menu.filterable {
+			num = "·"
 		}
-		line := fmt.Sprintf("   %s %s", styleDim.Render(fmt.Sprint(i+1)), it.label)
+		line := fmt.Sprintf("   %s %s", styleDim.Render(num), it.label)
 		if it.detail != "" {
 			line += styleDim.Render("  " + it.detail)
 		}
@@ -1129,7 +1229,8 @@ func runPicker(ctx context.Context, cfg config, demo bool) error {
 	var repo *repoRef
 	if demo {
 		d := newDemoSource()
-		client, repo = d, &d.home
+		home := d.homeRepo()
+		client, repo = d, &home
 		spawnTickFn = func() {}
 	} else {
 		if invoked != "" {
