@@ -220,7 +220,7 @@ func TestRepoTabOutsideARepoDoesntHang(t *testing.T) {
 	m := newModel(context.Background(), withDefaults(config{}), &pagedSource{}, "", nil)
 	m.width, m.height, m.tab = 100, 30, tabRepo
 	m = m.settle()
-	if m.mode != modeList || !strings.Contains(plain(m), "Press ctrl+t to pick a repo") {
+	if m.mode != modeList || !strings.Contains(plain(m), "Pick a repo") {
 		t.Fatalf("mode %v:\n%s", m.mode, plain(m))
 	}
 	next, _ := m.refreshAll()

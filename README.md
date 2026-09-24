@@ -110,8 +110,10 @@ Rows show the state (`●` open, `◌` draft), the number and title, then
 popup reopens on the tab you left.
 
 **Another repo.** The third tab starts on the repo of the space you opened
-the popup from. **ctrl+t** (or a click on that tab while you're on it) opens
-a picker, **grouped by organisation**:
+the popup from, named on its first row: `⇄ owner/repo  change repo ›`.
+Enter (or a click) on that row, **ctrl+t** from anywhere in the tab, or a
+click on the tab itself opens the list of repos right there, **grouped by
+organisation** (opened outside a repo, the tab starts on it):
 
 - this space's org first, with its repo on top;
 - then the orgs of your recent picks, your herdr spaces and your PRs;

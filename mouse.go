@@ -100,6 +100,7 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		} else if i, ok := m.rowAt(ev.Y); ok {
 			m.cursor = i
+			m.wantRepoRow = m.rows()[i].repo
 		}
 		return m, nil
 	}

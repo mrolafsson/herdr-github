@@ -148,6 +148,7 @@ type row struct {
 	header string // non-empty: a group heading, not selectable
 	spacer bool   // the blank line above a heading, not selectable
 	pr     *pullRequest
+	repo   bool // the repo tab's "change repo" row
 }
 
 // label rows are there to be read, never selected.
@@ -182,6 +183,10 @@ type model struct {
 	checkouts map[string]string // repo key → local checkout
 	cursor    int
 	offset    int
+	// wantRepoRow: you moved onto the "change repo" row, so the cursor
+	// stays there when the list under it changes.
+	wantRepoRow bool
+	startCmd    tea.Cmd // extra work for Init: opening the repo picker
 
 	// The PR screen (detail.go).
 	screen    screen
@@ -224,7 +229,7 @@ func newModel(ctx context.Context, cfg config, client source, invoked string, re
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.spin.Tick, m.loadAll())
+	return tea.Batch(m.spin.Tick, m.loadAll(), m.startCmd)
 }
 
 // useCache shows the lists the last popup loaded until fresh ones arrive.
@@ -525,6 +530,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch k.String() {
 		case "esc":
 			return m, tea.Quit
+		case "ctrl+t":
+			// A slow repo doesn't hold you there: pick another meanwhile.
+			if m.screen == screenList && m.menu == nil {
+				return m.openRepoPicker()
+			}
+			return m, nil
 		case "tab", "shift+tab", "left", "right":
 			// A load in flight doesn't lock the tabs; its reply still lands.
 			if m.screen != screenList || m.menu != nil {
@@ -588,6 +599,9 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+t":
 		return m.openRepoPicker()
 	case "enter":
+		if m.onRepoRow() {
+			return m.openRepoPicker()
+		}
 		if r := m.selected(); r != nil {
 			return m.openPR(*r.pr)
 		}
@@ -620,11 +634,14 @@ func (m model) switchTab(t tab) (tea.Model, tea.Cmd) {
 	if !m.demo {
 		rememberTab(t)
 	}
-	m.cursor, m.offset = 0, 0
+	m.cursor, m.offset, m.wantRepoRow = 0, 0, false
 	switch {
 	case t == tabRepo && m.repo == nil:
-		m.loaded[t] = true // nothing to load: the empty text says why
+		// No repo here to show: show the repos to choose from.
+		m.loaded[t] = true
 		m.mode = modeList
+		m.clampCursor()
+		return m.openRepoPicker()
 	case !m.loaded[t]:
 		m.mode = modeLoading // it was asked for with the others
 	default:
@@ -722,6 +739,11 @@ func tildePath(p string) string {
 func (m model) rows() []row {
 	q := m.filter.Value()
 	var rows []row
+	if m.tab == tabRepo {
+		// The repo tab says which repo it's showing, and switching is one
+		// enter away: no key to remember.
+		rows = append(rows, row{repo: true})
+	}
 	last := "\x00"
 	list := m.prs[m.tab]
 	for i := range list {
@@ -738,6 +760,14 @@ func (m model) rows() []row {
 			last = group
 		}
 		rows = append(rows, row{pr: pr})
+	}
+	// Under the repo row, say why there are no PRs below it.
+	if m.tab == tabRepo && len(rows) == 1 && m.repo != nil {
+		text := m.emptyText()
+		if !m.loaded[tabRepo] || m.mode == modeLoading {
+			text = m.spin.View() + " Loading…"
+		}
+		rows = append(rows, row{spacer: true}, row{header: text})
 	}
 	return rows
 }
@@ -757,12 +787,19 @@ func (m model) groupOf(pr pullRequest) string {
 	return pr.Repository.NameWithOwner
 }
 
+// selected is the PR row under the cursor, if that's where it is.
 func (m model) selected() *row {
 	rows := m.rows()
-	if m.cursor >= 0 && m.cursor < len(rows) && !rows[m.cursor].label() {
+	if m.cursor >= 0 && m.cursor < len(rows) && rows[m.cursor].pr != nil {
 		return &rows[m.cursor]
 	}
 	return nil
+}
+
+// onRepoRow says whether the cursor is on the "change repo" row.
+func (m model) onRepoRow() bool {
+	rows := m.rows()
+	return m.cursor >= 0 && m.cursor < len(rows) && rows[m.cursor].repo
 }
 
 func (m *model) move(delta int) {
@@ -783,6 +820,7 @@ func (m *model) move(delta int) {
 		c = m.cursor
 	}
 	m.cursor = c
+	m.wantRepoRow = rows[c].repo
 	m.scrollTo()
 }
 
@@ -794,7 +832,13 @@ func (m *model) clampCursor() {
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
-	for m.cursor < len(rows) && rows[m.cursor].label() {
+	// The cursor starts on the first PR, not the "change repo" row above
+	// it, unless you went there.
+	hasPR := false
+	for _, r := range rows {
+		hasPR = hasPR || r.pr != nil
+	}
+	for m.cursor < len(rows) && (rows[m.cursor].label() || (rows[m.cursor].repo && hasPR && !m.wantRepoRow)) {
 		m.cursor++
 	}
 	m.scrollTo()
@@ -982,6 +1026,23 @@ func (m model) viewRow(r row, selected bool) string {
 	}
 	if r.header != "" {
 		return styleDim.Render("  " + r.header)
+	}
+	if r.repo {
+		left := " " + styleTree.Render("⇄") + " "
+		name := "Pick a repo"
+		if m.repo != nil {
+			name = m.repo.String()
+			if m.repo.Host != "github.com" {
+				name = m.repo.Host + "/" + name
+			}
+			left += styleHeader.Render(name)
+			name = ""
+		}
+		hint := "change repo ›  "
+		if m.repo == nil {
+			hint = "›  "
+		}
+		return m.fitRow(left, name, styleDim.Render(hint), w, selected)
 	}
 	pr := r.pr
 	num := fmt.Sprintf("#%-*d", m.numWidth(), pr.Number)
@@ -1338,6 +1399,10 @@ func runPicker(ctx context.Context, cfg config, demo bool) error {
 		m = m.useCache(readListCache(repo))
 	}
 	m = m.settle()
+	if m.tab == tabRepo && m.repo == nil {
+		next, cmd := m.openRepoPicker()
+		m, m.startCmd = next.(model), cmd
+	}
 	program = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	_, err := program.Run()
 	return err

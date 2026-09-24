@@ -538,3 +538,45 @@ func TestClickingTheRepoTabYoureOnPicksARepo(t *testing.T) {
 		t.Fatal("clicking the active repo tab should open the picker")
 	}
 }
+
+func TestRepoTabHasAChangeRepoRow(t *testing.T) {
+	m := demoModel(t, tabRepo)
+	v := plain(m)
+	if !strings.Contains(v, "⇄ halcyon/notes-app") || !strings.Contains(v, "change repo") {
+		t.Fatalf("no change-repo row:\n%s", v)
+	}
+	// The cursor starts on the first PR, not the row above.
+	if r := m.selected(); r == nil || r.pr.Number != 482 {
+		t.Fatalf("cursor on %+v", m.selected())
+	}
+	// ↑ reaches it; enter opens the picker in the tab.
+	m = press(m, "up")
+	if !m.onRepoRow() {
+		t.Fatal("up from the first PR should land on the change-repo row")
+	}
+	m = press(m, "enter")
+	if m.menu == nil || m.menu.id != "repos" {
+		t.Fatal("enter on the row should open the repo list")
+	}
+	// A click on the row does the same.
+	m = demoModel(t, tabRepo)
+	next, cmd := m.Update(tea.MouseMsg{X: 5, Y: listTop, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = drive(next.(model), cmd)
+	if m.menu == nil || m.menu.id != "repos" {
+		t.Fatal("clicking the row should open the repo list")
+	}
+	// Other tabs don't have it.
+	if strings.Contains(plain(press(demoModel(t, tabMine), "esc")), "change repo") {
+		t.Fatal("change-repo row on the Mine tab")
+	}
+}
+
+func TestRepoTabOutsideARepoOpensTheList(t *testing.T) {
+	m := newModel(context.Background(), withDefaults(config{}), newDemoSource(), "", nil)
+	m.width, m.height = 100, 30
+	next, cmd := m.switchTab(tabRepo)
+	m = drive(next.(model), cmd)
+	if m.menu == nil || m.menu.id != "repos" {
+		t.Fatalf("the repo tab with no repo should show the repo list:\n%s", plain(m))
+	}
+}
