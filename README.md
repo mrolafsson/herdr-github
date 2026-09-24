@@ -359,10 +359,10 @@ PR's branch.
 
 **What's kept locally**, in `~/.local/state/herdr/plugins/herdr-github/`,
 readable only by you: `lists.json` (the last lists, shown while fresh ones
-load: numbers, titles, branches, states), `lists.json` also keeps the repos you can
-reach, for the repo list. `labels.json` (each branch's PR
-status, for the labels), `prefs.json` (your last tab, your merge method per
-repo, repos you picked lately) and the background log.
+load: numbers, titles, branches, states; and the repos you can reach, for
+the repo list), `labels.json` (each branch's PR status, for the labels),
+`prefs.json` (your last tab, your merge method per repo, repos you picked
+lately) and the background log.
 
 **Text from GitHub.** Titles, bodies, comments, names and labels are written
 by other people, so every string has terminal escape sequences and control
