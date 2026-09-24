@@ -41,20 +41,60 @@ func localBranch(pr pullRequest) string {
 // repo called "alice/fix" and alice's fork PR from "fix" would share one.
 const prMarker = "herdr-github-pr"
 
+// prMark is what the marker holds: the PR, and its head (owner:branch) in
+// its repo. The head is what a branch really is: a PR closed and reopened
+// from the same branch is a new number on the same head.
+func prMark(pr pullRequest) string {
+	return pr.key() + " " + pr.headOwner() + ":" + pr.HeadRefName
+}
+
+// markHead is a marker's repo and head ("host/owner/repo owner:branch"), or
+// "" for a marker written before heads were recorded.
+func markHead(mark string) string {
+	key, head, ok := strings.Cut(mark, " ")
+	if !ok {
+		return ""
+	}
+	repo, _, _ := strings.Cut(key, "#")
+	return strings.ToLower(repo + " " + head)
+}
+
 // branchConflict says why the PR can't use an existing local branch: it was
-// made for another PR, or (for a fork's PR) it's a branch of yours that only
-// happens to have the name.
+// made for another PR's head, or (for a fork's PR) it's a branch of yours that
+// only happens to have the name. A branch this PR may use is marked as its.
 func branchConflict(ctx context.Context, dir string, pr pullRequest, branch string) error {
 	mark, _ := git(ctx, dir, "config", "--get", "branch."+branch+"."+prMarker)
+	want := prMark(pr)
+	ok := false
 	switch {
-	case mark == pr.key():
-		return nil
+	case mark == want, mark == pr.key():
+		ok = true
+	case mark != "" && markHead(mark) != "" && markHead(mark) == markHead(want):
+		ok = true // the same head, under a new PR number
 	case mark != "":
-		return fmt.Errorf("the branch %s is %s's, not #%d's", branch, mark, pr.Number)
-	case pr.IsCrossRepository:
+		name, _, _ := strings.Cut(mark, " ")
+		return fmt.Errorf("the branch %s belongs to %s, not #%d: delete or rename it to check out #%d here", branch, name, pr.Number, pr.Number)
+	case !pr.IsCrossRepository:
+		ok = true // a branch of the repo itself: its name is its head
+	case pr.HeadRepository != nil && pushesToFork(ctx, dir, pr, branch):
+		ok = true // set up for this fork, before branches were marked
+	default:
 		return fmt.Errorf("a branch named %s already exists and isn't #%d's: rename it to check out the fork's", branch, pr.Number)
 	}
+	if ok && mark != want {
+		_, _ = git(ctx, dir, "config", "branch."+branch+"."+prMarker, want)
+	}
 	return nil
+}
+
+// pushesToFork says whether branch is set up to pull from the PR's fork and
+// head branch, as this plugin (or gh) sets up a fork's PR.
+func pushesToFork(ctx context.Context, dir string, pr pullRequest, branch string) bool {
+	rem, _ := git(ctx, dir, "config", "--get", "branch."+branch+".remote")
+	merge, _ := git(ctx, dir, "config", "--get", "branch."+branch+".merge")
+	r, ok := parseRemote(rem)
+	return ok && strings.EqualFold(r.Owner+"/"+r.Name, pr.HeadRepository.NameWithOwner) &&
+		merge == "refs/heads/"+pr.HeadRefName
 }
 
 // prWorktree finds the linked worktree on branch in dir. The main checkout
@@ -87,7 +127,7 @@ var (
 // refs/pull/N/head for one from a fork. A fork's branch is then set to pull
 // from and push to the fork (as `gh pr checkout` does), which works when the
 // author lets maintainers edit.
-func openWorktree(ctx context.Context, pr pullRequest, dir string) (*worktreeResult, bool, error) {
+func openWorktree(ctx context.Context, cfg config, pr pullRequest, dir string) (*worktreeResult, bool, error) {
 	branch := localBranch(pr)
 	existing, err := listWorktrees(dir)
 	if err != nil {
@@ -102,7 +142,7 @@ func openWorktree(ctx context.Context, pr pullRequest, dir string) (*worktreeRes
 		return &res, false, err
 	}
 
-	rem, ok := remoteForCheckout(ctx, dir, pr.repo())
+	rem, ok := remoteForCheckout(ctx, cfg, dir, pr.repo())
 	if !ok {
 		return nil, false, fmt.Errorf("%s has no remote for %s", dir, pr.repo())
 	}
@@ -136,7 +176,7 @@ func openWorktree(ctx context.Context, pr pullRequest, dir string) (*worktreeRes
 		return nil, false, err
 	}
 	if haveLocal != nil && res.Worktree.Path != "" {
-		_, _ = git(ctx, res.Worktree.Path, "config", "branch."+branch+"."+prMarker, pr.key())
+		_, _ = git(ctx, res.Worktree.Path, "config", "branch."+branch+"."+prMarker, prMark(pr))
 		trackHead(ctx, res.Worktree.Path, pr, rem, branch)
 	}
 	return &res, true, nil
@@ -174,7 +214,7 @@ func forkRemoteURL(baseURL, host, nameWithOwner string) string {
 // worktree's agent is also handed its first prompt. Only a new one: an
 // existing worktree's agent may be in the middle of something.
 func doWorktree(ctx context.Context, cfg config, pr pullRequest, dir string, start bool) actionDoneMsg {
-	res, created, err := openWorktreeFn(ctx, pr, dir)
+	res, created, err := openWorktreeFn(ctx, cfg, pr, dir)
 	if err != nil {
 		return actionDoneMsg{err: err}
 	}

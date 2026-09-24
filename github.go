@@ -690,9 +690,9 @@ func (c *ghClient) prsForBranches(ctx context.Context, r repoRef, heads []branch
 			Nodes []prStatus `json:"nodes"`
 		} `json:"repository"`
 	}
-	err := c.graphql(ctx, b.String(), vars, &res)
-	var partial *partialError
-	if err != nil && !errors.As(err, &partial) {
+	// A partial answer here is a failure: a branch GitHub didn't answer for
+	// would read as "no PR" and clear its label.
+	if err := c.graphql(ctx, b.String(), vars, &res); err != nil {
 		return nil, err
 	}
 	out := map[branchHead]prStatus{}

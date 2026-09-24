@@ -250,7 +250,7 @@ func TestOpenWorktreeForSameRepoPR(t *testing.T) {
 	ctx := context.Background()
 	pr := samePR("github.com")
 
-	res, created, err := openWorktree(ctx, pr, f.clone)
+	res, created, err := openWorktree(ctx, withDefaults(config{}), pr, f.clone)
 	if err != nil || !created {
 		t.Fatalf("created=%v err=%v", created, err)
 	}
@@ -262,7 +262,7 @@ func TestOpenWorktreeForSameRepoPR(t *testing.T) {
 		t.Fatalf("upstream = %q", got)
 	}
 	// Again: it's opened, not made twice.
-	if _, created, err := openWorktree(ctx, pr, f.clone); err != nil || created || h.created != 1 {
+	if _, created, err := openWorktree(ctx, withDefaults(config{}), pr, f.clone); err != nil || created || h.created != 1 {
 		t.Fatalf("second open: created=%v err=%v", created, err)
 	}
 }
@@ -271,7 +271,7 @@ func TestOpenWorktreeForForkPR(t *testing.T) {
 	f := gitFixture(t)
 	h := &fakeHerdr{}
 	h.install(t)
-	res, created, err := openWorktree(context.Background(), forkPR(), f.clone)
+	res, created, err := openWorktree(context.Background(), withDefaults(config{}), forkPR(), f.clone)
 	if err != nil || !created {
 		t.Fatalf("created=%v err=%v", created, err)
 	}
@@ -298,7 +298,7 @@ func TestOpenWorktreeKeepsAnExistingBranch(t *testing.T) {
 	h.install(t)
 	sh(t, f.clone, "git", "branch", "feat", "main")
 	mainSHA := sh(t, f.clone, "git", "rev-parse", "main")
-	res, _, err := openWorktree(context.Background(), samePR("github.com"), f.clone)
+	res, _, err := openWorktree(context.Background(), withDefaults(config{}), samePR("github.com"), f.clone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestRemoveWorktreeWithoutASpaceUsesGit(t *testing.T) {
 	f := gitFixture(t)
 	h := &fakeHerdr{}
 	h.install(t)
-	res, _, err := openWorktree(context.Background(), samePR("github.com"), f.clone)
+	res, _, err := openWorktree(context.Background(), withDefaults(config{}), samePR("github.com"), f.clone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,11 +373,11 @@ func TestTickLabelsSpacesAndAgents(t *testing.T) {
 	h := &fakeHerdr{}
 	h.install(t)
 	ctx := context.Background()
-	feat, _, err := openWorktree(ctx, samePR("github.com"), f.clone)
+	feat, _, err := openWorktree(ctx, withDefaults(config{}), samePR("github.com"), f.clone)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fork, _, err := openWorktree(ctx, forkPR(), f.clone)
+	fork, _, err := openWorktree(ctx, withDefaults(config{}), forkPR(), f.clone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +480,7 @@ func TestTickKeepsLabelsWhenGitHubFails(t *testing.T) {
 	f := gitFixture(t)
 	h := &fakeHerdr{}
 	h.install(t)
-	feat, _, _ := openWorktree(context.Background(), samePR("github.com"), f.clone)
+	feat, _, _ := openWorktree(context.Background(), withDefaults(config{}), samePR("github.com"), f.clone)
 	old := listWorkspacesFn
 	listWorkspacesFn = listWorkspaces
 	t.Cleanup(func() { listWorkspacesFn = old })

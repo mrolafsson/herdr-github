@@ -347,7 +347,7 @@ func confirmMerge(d *prDetail, method string, auto bool) *menu {
 		title = fmt.Sprintf("Turn on auto-merge (%s) for #%d? It merges once checks and reviews allow.", strings.ToLower(methodNames[method]), d.Number)
 		yes = "Turn on auto-merge"
 	}
-	return &menu{title: title, cursor: 1, items: []menuItem{
+	return &menu{title: title, cursor: 1, noDigits: true, items: []menuItem{
 		{label: yes, run: func(m model) (tea.Model, tea.Cmd) {
 			client, ctx, key, repo := m.client, m.ctx, d.key(), d.repo()
 			status := fmt.Sprintf("Merging #%d…", d.Number)
@@ -421,7 +421,7 @@ func (m model) cleanupMenu(d *prDetail) *menu {
 			})
 		}}
 	}
-	mn := &menu{title: fmt.Sprintf("Merged #%d. Clean up?", d.Number)}
+	mn := &menu{title: fmt.Sprintf("Merged #%d. Clean up?", d.Number), noDigits: true}
 	if canDelete && hasTree {
 		mn.items = append(mn.items, run("Delete the branch and remove the worktree", true, true))
 	}

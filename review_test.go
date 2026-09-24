@@ -30,12 +30,12 @@ func TestForkAndRepoBranchNamesCantCollide(t *testing.T) {
 
 	same := samePR("github.com")
 	same.Number, same.HeadRefName = 7, "alice/fix"
-	res, created, err := openWorktree(ctx, same, f.clone)
+	res, created, err := openWorktree(ctx, withDefaults(config{}), same, f.clone)
 	if err != nil || !created {
 		t.Fatalf("#7: created=%v err=%v", created, err)
 	}
 	fork := forkPR()
-	if _, _, err := openWorktree(ctx, fork, f.clone); err == nil || !strings.Contains(err.Error(), "#7") {
+	if _, _, err := openWorktree(ctx, withDefaults(config{}), fork, f.clone); err == nil || !strings.Contains(err.Error(), "#7") {
 		t.Fatalf("#5 should refuse #7's branch, got %v", err)
 	}
 	if err := removeWorktree(ctx, fork, f.clone); err == nil {
@@ -48,7 +48,7 @@ func TestForkAndRepoBranchNamesCantCollide(t *testing.T) {
 	sh(t, f.clone, "git", "branch", "bob/fix", "main")
 	bob := forkPR()
 	bob.HeadRepositoryOwner = &actor{"bob"}
-	if _, _, err := openWorktree(ctx, bob, f.clone); err == nil || !strings.Contains(err.Error(), "rename") {
+	if _, _, err := openWorktree(ctx, withDefaults(config{}), bob, f.clone); err == nil || !strings.Contains(err.Error(), "rename") {
 		t.Fatalf("a branch of yours named like the fork's: %v", err)
 	}
 }
@@ -60,7 +60,7 @@ func TestMainCheckoutIsNotAPRWorktree(t *testing.T) {
 	h := &fakeHerdr{}
 	h.install(t)
 	sh(t, f.clone, "git", "switch", "-q", "feat")
-	res, _, err := openWorktree(context.Background(), samePR("github.com"), f.clone)
+	res, _, err := openWorktree(context.Background(), withDefaults(config{}), samePR("github.com"), f.clone)
 	if err == nil && res.Worktree.Path == f.clone {
 		t.Fatal("opened the main checkout as the PR's worktree")
 	}
@@ -86,7 +86,7 @@ func TestMappedCheckoutWithSSHAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, created, err := openWorktree(context.Background(), samePR("github.com"), dir); err != nil || !created {
+	if _, created, err := openWorktree(context.Background(), withDefaults(config{}), samePR("github.com"), dir); err != nil || !created {
 		t.Fatalf("created=%v err=%v", created, err)
 	}
 }
@@ -137,7 +137,7 @@ func TestTickBacksOffAfterAFailure(t *testing.T) {
 	f := gitFixture(t)
 	h := &fakeHerdr{}
 	h.install(t)
-	feat, _, _ := openWorktree(context.Background(), samePR("github.com"), f.clone)
+	feat, _, _ := openWorktree(context.Background(), withDefaults(config{}), samePR("github.com"), f.clone)
 	old := listWorkspacesFn
 	listWorkspacesFn = listWorkspaces
 	t.Cleanup(func() { listWorkspacesFn = old })
@@ -171,7 +171,7 @@ func TestOfflineBranchSwitchDropsTheOldLabel(t *testing.T) {
 	f := gitFixture(t)
 	h := &fakeHerdr{}
 	h.install(t)
-	feat, _, _ := openWorktree(context.Background(), samePR("github.com"), f.clone)
+	feat, _, _ := openWorktree(context.Background(), withDefaults(config{}), samePR("github.com"), f.clone)
 	old := listWorkspacesFn
 	listWorkspacesFn = listWorkspaces
 	t.Cleanup(func() { listWorkspacesFn = old })
@@ -323,5 +323,66 @@ func TestRepoSwitchBackDropsOldPages(t *testing.T) {
 	next, _ = m.Update(stale)
 	if strings.Contains(plain(next.(model)), "PR 21") {
 		t.Fatal("a page from before the switches was shown")
+	}
+}
+
+// A PR closed and reopened from the same branch is the same head: its new
+// number takes the branch over.
+func TestReopenedPRTakesOverItsBranch(t *testing.T) {
+	f := gitFixture(t)
+	h := &fakeHerdr{}
+	h.install(t)
+	cfg := withDefaults(config{})
+	if _, _, err := openWorktree(context.Background(), cfg, samePR("github.com"), f.clone); err != nil {
+		t.Fatal(err)
+	}
+	again := samePR("github.com")
+	again.Number = 13
+	if _, created, err := openWorktree(context.Background(), cfg, again, f.clone); err != nil || created {
+		t.Fatalf("reopened as #13: created=%v err=%v", created, err)
+	}
+	if err := removeWorktree(context.Background(), again, f.clone); err != nil {
+		t.Fatalf("clean-up for #13: %v", err)
+	}
+}
+
+// A fork's branch set up before branches were marked (it pulls from the
+// fork) is still that PR's.
+func TestUnmarkedForkBranchSetUpForTheForkIsAccepted(t *testing.T) {
+	f := gitFixture(t)
+	h := &fakeHerdr{}
+	h.install(t)
+	sh(t, f.clone, "git", "fetch", "-q", "origin", "refs/pull/5/head:alice/fix")
+	sh(t, f.clone, "git", "config", "branch.alice/fix.remote", "https://github.com/alice/r.git")
+	sh(t, f.clone, "git", "config", "branch.alice/fix.merge", "refs/heads/fix")
+	if _, _, err := openWorktree(context.Background(), withDefaults(config{}), forkPR(), f.clone); err != nil {
+		t.Fatalf("pre-marker fork branch refused: %v", err)
+	}
+}
+
+// o/r on another GitHub you use is a different repo: never its checkout.
+func TestAnotherGitHubsRepoIsNotAnAlias(t *testing.T) {
+	f := gitFixture(t)
+	h := &fakeHerdr{}
+	h.install(t)
+	cfg := withDefaults(config{Hosts: []string{"github.com", "ghe.example.com"}})
+	pr := forkPR()
+	pr.Host = "ghe.example.com"
+	if _, _, err := openWorktree(context.Background(), cfg, pr, f.clone); err == nil || !strings.Contains(err.Error(), "no remote") {
+		t.Fatalf("a github.com checkout was used for a GHE PR: %v", err)
+	}
+}
+
+// A partial answer about branches is a failure: labels stay as they are.
+func TestPartialBranchAnswerKeepsLabels(t *testing.T) {
+	fakeGitHub(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data":   map[string]any{"repository": map[string]any{"b0": nil}},
+			"errors": []any{map[string]any{"message": "Something went wrong while executing your query."}},
+		})
+	})
+	_, err := newClient("github.com").prsForBranches(context.Background(), repoRef{"github.com", "o", "r"}, []branchHead{{"feat", "o"}})
+	if err == nil {
+		t.Fatal("a partial answer about branches should be an error")
 	}
 }

@@ -1151,6 +1151,10 @@ type menu struct {
 	filterable bool
 	query      string
 	typed      func(q string) *menuItem
+
+	// noDigits turns off the number shortcuts: a confirmation mustn't be
+	// answered by the same key that asked for it (m, 1, 1 merging).
+	noDigits bool
 }
 
 type menuItem struct {
@@ -1293,7 +1297,7 @@ func (m model) handleMenuKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.moveMenu(-1)
 		case s == "j":
 			m.moveMenu(1)
-		case len(s) == 1 && s[0] >= '1' && s[0] <= '9' && int(s[0]-'1') < n:
+		case !m.menu.noDigits && len(s) == 1 && s[0] >= '1' && s[0] <= '9' && int(s[0]-'1') < n:
 			return m.chooseMenu(int(s[0] - '1'))
 		}
 	}
@@ -1365,7 +1369,7 @@ func (m model) viewMenu(room int) string {
 			continue
 		}
 		num := fmt.Sprint(i + 1)
-		if m.menu.filterable {
+		if m.menu.filterable || m.menu.noDigits {
 			num = "·"
 		}
 		line := fmt.Sprintf("   %s %s", styleDim.Render(num), it.label)

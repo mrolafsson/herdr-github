@@ -136,13 +136,17 @@ func remoteFor(ctx context.Context, dir string, r repoRef) (remote, bool) {
 
 // remoteForCheckout is remoteFor for a checkout already chosen (mapped in
 // the config, say), where a remote may name the host by an SSH alias
-// ("git@work-github:o/r"): then owner and name are enough.
-func remoteForCheckout(ctx context.Context, dir string, r repoRef) (remote, bool) {
+// ("git@work-github:o/r"): then owner and name are enough. Not for a remote
+// on another GitHub you use: o/r there is a different repo.
+func remoteForCheckout(ctx context.Context, cfg config, dir string, r repoRef) (remote, bool) {
 	if x, ok := remoteFor(ctx, dir, r); ok {
 		return x, true
 	}
 	var found []remote
 	for _, x := range remotesOf(ctx, dir) {
+		if cfg.knownHost(x.Repo.Host) || x.Repo.Host == "github.com" {
+			continue // a real GitHub host, and not r's
+		}
 		if strings.EqualFold(x.Repo.Owner, r.Owner) && strings.EqualFold(x.Repo.Name, r.Name) {
 			found = append(found, x)
 		}
