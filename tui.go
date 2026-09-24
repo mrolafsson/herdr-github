@@ -32,6 +32,7 @@ const (
 type listMsg struct {
 	tab    tab
 	repo   string // the repo tab's repo it's for (key)
+	pick   int    // …and which pick of it (see model.picks)
 	cursor string // the page asked for: "" is the first
 	prs    []pullRequest
 	next   string // the page after, "" at the end
@@ -186,6 +187,8 @@ type model struct {
 	// wantRepoRow: you moved onto the "change repo" row, so the cursor
 	// stays there when the list under it changes.
 	wantRepoRow bool
+	picks       int     // bumped on every repo switch: A→B→A mustn't take A's old pages
+	menuOffset  int     // the menu's first shown item, kept so hovering doesn't scroll it
 	startCmd    tea.Cmd // extra work for Init: opening the repo picker
 
 	// The PR screen (detail.go).
@@ -268,14 +271,14 @@ func (m model) loadAll() tea.Cmd {
 
 func (m model) loadTab(t tab, cursor string) tea.Cmd {
 	client, ctx, gen := m.client, m.ctx, m.gen
-	repo := ""
+	repo, pick := "", m.picks
 	if t == tabRepo && m.repo != nil {
 		repo = m.repo.key()
 	}
 	return func() tea.Msg {
 		debugf("loadTab start tab=%d cursor=%q", t, cursor)
 		p, err := client.list(ctx, t, cursor)
-		return listMsg{tab: t, repo: repo, cursor: cursor, prs: p.prs, next: p.next, err: err, gen: gen}
+		return listMsg{tab: t, repo: repo, pick: pick, cursor: cursor, prs: p.prs, next: p.next, err: err, gen: gen}
 	}
 }
 
@@ -384,7 +387,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.gen {
 			return m, nil
 		}
-		if msg.tab == tabRepo && (m.repo == nil || msg.repo != m.repo.key()) {
+		if msg.tab == tabRepo && (m.repo == nil || msg.repo != m.repo.key() || msg.pick != m.picks) {
 			return m, nil // for a repo that's no longer the one picked
 		}
 		t := msg.tab
@@ -448,7 +451,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case repoChoicesMsg:
 		m.repoLocal = msg
-		if m.mode == modeSignedOut || m.menu != nil {
+		// Asked for from the list; if you've moved on (into a PR), let it go.
+		if m.mode == modeSignedOut || m.mode == modeBusy || m.menu != nil || m.screen != screenList {
 			return m, nil
 		}
 		return m.openMenu(m.repoMenu()), nil
@@ -513,6 +517,11 @@ func (m model) refreshAll() (model, tea.Cmd) {
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+c" {
 		return m, tea.Quit
+	}
+	// An open menu takes the keys, loading or not: the repo list opened
+	// while a repo loads must work (and esc must close it, not the popup).
+	if m.menu != nil && m.mode != modeSignedOut && m.mode != modeBusy {
+		return m.handleMenuKey(k)
 	}
 	switch m.mode {
 	case modeSignedOut:
@@ -1160,7 +1169,7 @@ func (it menuItem) haystack() string {
 }
 
 func (m model) openMenu(mn *menu) model {
-	m.menu, m.menuCursor, m.flash, m.menuOpened = mn, mn.cursor, "", time.Now()
+	m.menu, m.menuCursor, m.flash, m.menuOpened, m.menuOffset = mn, mn.cursor, "", time.Now(), 0
 	m.menuCursor = m.selectable(m.menuCursor, 1)
 	return m
 }
@@ -1193,6 +1202,7 @@ func (m *model) moveMenu(delta int) {
 	if items := m.menuItems(); next >= 0 && next < n && !items[next].header {
 		m.menuCursor = next
 	}
+	m.menuOffset = m.menuStart(m.menuRoom())
 }
 
 // menuClickGuard is how long a new menu ignores clicks: the second click of a
@@ -1295,7 +1305,7 @@ func (m model) handleMenuKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) setMenuQuery(q string) {
 	mn := *m.menu
 	mn.query = q
-	m.menu, m.menuCursor = &mn, 0
+	m.menu, m.menuCursor, m.menuOffset = &mn, 0, 0
 	m.menuCursor = m.selectable(0, 1)
 }
 
@@ -1313,12 +1323,27 @@ func (m model) chooseMenu(i int) (tea.Model, tea.Cmd) {
 // menu's own block: the title and a blank line.
 const menuTop = 2
 
-// menuStart is the first item shown, so the cursor stays in view.
+// menuStart is the first item shown: where the menu was scrolled to, moved
+// only as far as it takes to keep the cursor in view. Hovering moves the
+// cursor within what's shown, so it never scrolls under the pointer.
 func (m model) menuStart(room int) int {
-	if vis := room - menuTop; vis > 0 && m.menuCursor >= vis {
-		return m.menuCursor - vis + 1
+	vis := max(1, room-menuTop)
+	start := m.menuOffset
+	if m.menuCursor < start {
+		start = m.menuCursor
 	}
-	return 0
+	if m.menuCursor >= start+vis {
+		start = m.menuCursor - vis + 1
+	}
+	return max(0, start)
+}
+
+// menuRoom is how many lines the open menu has, on the screen it's over.
+func (m model) menuRoom() int {
+	if m.screen != screenList {
+		return m.bodyRoomFor(m.prHeader())
+	}
+	return m.listHeight()
 }
 
 func (m model) viewMenu(room int) string {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // A same-repo branch "alice/fix" and alice's fork PR from "fix" share a
@@ -246,5 +249,79 @@ func TestDraftWaitsForTheFreshPR(t *testing.T) {
 	m = press(m, "d")
 	if m.mode == modeBusy || m.flash != "Still loading…" {
 		t.Fatalf("d without a loaded PR: mode %v flash %q", m.mode, m.flash)
+	}
+}
+
+// ── round 2 ───────────────────────────────────────────────────────────────────
+
+// The repo list opened while a repo loads takes keys, and esc closes it,
+// not the popup.
+func TestRepoListWorksWhileARepoLoads(t *testing.T) {
+	m := demoModel(t, tabRepo)
+	m.mode = modeLoading // as if the repo were still loading
+	next, cmd := m.Update(keyMsg("ctrl+t"))
+	m = drive(next.(model), cmd)
+	if m.menu == nil {
+		t.Fatal("ctrl+t while loading should open the list")
+	}
+	before := m.menuCursor
+	m = press(m, "down")
+	if m.menuCursor == before {
+		t.Fatal("keys ignored in the list while loading")
+	}
+	next, cmd = m.Update(keyMsg("esc"))
+	if quits(cmd) || next.(model).menu != nil {
+		t.Fatal("esc should close the list, not the popup")
+	}
+}
+
+// Hovering a scrolled list never scrolls it under the pointer.
+func TestHoverDoesntScrollTheMenu(t *testing.T) {
+	m := demoModel(t, tabRepo)
+	m.height = 14 // room for a few items only
+	mn := &menu{id: "x", title: "t", filterable: true}
+	for i := 0; i < 40; i++ {
+		mn.items = append(mn.items, menuItem{label: fmt.Sprintf("item %d", i), run: func(m model) (tea.Model, tea.Cmd) { return m, nil }})
+	}
+	m = m.openMenu(mn)
+	for i := 0; i < 20; i++ {
+		m = press(m, "down")
+	}
+	start := m.menuStart(m.menuRoom())
+	top := listTop + menuTop
+	for y := top; y < top+3; y++ {
+		next, _ := m.Update(tea.MouseMsg{X: 5, Y: y, Action: tea.MouseActionMotion})
+		m = next.(model)
+		if got := m.menuStart(m.menuRoom()); got != start {
+			t.Fatalf("hovering line %d scrolled the menu from %d to %d", y, start, got)
+		}
+		if m.menuCursor != start+(y-top) {
+			t.Fatalf("hover on line %d put the cursor on %d, not the item drawn there (%d)", y, m.menuCursor, start+(y-top))
+		}
+	}
+}
+
+// Repo choices arriving after you've opened a PR don't cover it.
+func TestLateRepoChoicesDontCoverAPR(t *testing.T) {
+	m := demoModel(t, tabRepo)
+	late := m.loadRepoChoices()()
+	m = press(m, "enter") // into #482
+	next, _ := m.Update(late)
+	if next.(model).menu != nil {
+		t.Fatal("the repo list opened over the PR screen")
+	}
+}
+
+// A→B→A: pages asked for during the first A don't land in the second.
+func TestRepoSwitchBackDropsOldPages(t *testing.T) {
+	m := demoModel(t, tabRepo)
+	a := *m.repo
+	stale := listMsg{tab: tabRepo, repo: a.key(), pick: m.picks, cursor: "p2", prs: prsNumbered(21, 22), gen: m.gen}
+	next, _ := m.switchRepo(repoRef{"github.com", "halcyon", "sync-server"})
+	next, _ = next.(model).switchRepo(a)
+	m = next.(model)
+	next, _ = m.Update(stale)
+	if strings.Contains(plain(next.(model)), "PR 21") {
+		t.Fatal("a page from before the switches was shown")
 	}
 }

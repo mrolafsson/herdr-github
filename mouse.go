@@ -91,7 +91,7 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 	m.mouseX, m.mouseY = ev.X, ev.Y
 	if ev.Action == tea.MouseActionMotion {
 		// Hover highlights, like a launcher: the click then opens what you see.
-		if m.mode == modeBusy || m.mode == modeLoading {
+		if m.mode == modeBusy || (m.mode == modeLoading && m.menu == nil) {
 			return m, nil
 		}
 		if i, ok := m.menuAt(ev.Y); ok {
@@ -138,7 +138,7 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if m.mode == modeLoading {
+	if m.mode == modeLoading && m.menu == nil {
 		return m, nil
 	}
 	if i, ok := m.menuAt(ev.Y); ok {
@@ -172,10 +172,9 @@ func (m model) menuAt(y int) (int, bool) {
 	if m.menu == nil {
 		return 0, false
 	}
-	top, room := listTop, m.listHeight()
+	top, room := listTop, m.menuRoom()
 	if m.screen != screenList {
-		header := m.prHeader()
-		top, room = 2+strings.Count(header, "\n"), m.bodyRoomFor(header) // tabs, blank, header
+		top = 2 + strings.Count(m.prHeader(), "\n") // tabs, blank, header
 	}
 	row := y - top - menuTop
 	i := m.menuStart(room) + row
