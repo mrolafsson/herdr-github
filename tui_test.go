@@ -423,17 +423,27 @@ func TestRepoPickerSwitchesTheRepoTab(t *testing.T) {
 	if m.menu == nil || !m.menu.filterable {
 		t.Fatal("ctrl+t should open the repo picker")
 	}
+	// Grouped by org: this space's first, its repos on top; then the rest of
+	// what GitHub says you can reach, most recently pushed first.
 	v := plain(m)
-	for _, want := range []string{"halcyon/notes-app", "this space · showing", "halcyon/sync-server", "halcyon/design-system"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("picker lacks %q:\n%s", want, v)
+	order := []string{"halcyon", "notes-app  this space · showing", "sync-server  a herdr space", "website  pushed", "sam", "dotfiles", "oss-typesetting", "mdtype"}
+	last := -1
+	for _, want := range order {
+		i := strings.Index(v, want)
+		if i < 0 || i < last {
+			t.Fatalf("%q missing or out of order:\n%s", want, v)
 		}
+		last = i
 	}
-	// Typing filters; digits are text here, not shortcuts.
+	if r := m.menuItems()[m.menuCursor]; r.header || r.label != "notes-app" {
+		t.Fatalf("cursor should start on the first repo, not a heading: %+v", r)
+	}
+	// Typing filters, keeping each match's heading.
 	for _, r := range "sync" {
 		m = press(m, string(r))
 	}
-	if items := m.menuItems(); len(items) != 1 || items[0].label != "halcyon/sync-server" {
+	items := m.menuItems()
+	if len(items) != 2 || !items[0].header || items[1].label != "sync-server" {
 		t.Fatalf("filter: %+v", items)
 	}
 	m = press(m, "enter")
@@ -445,8 +455,45 @@ func TestRepoPickerSwitchesTheRepoTab(t *testing.T) {
 	}
 	// The space's own repo is still the one marked as this space's.
 	m = press(m, "ctrl+t")
-	if !strings.Contains(plain(m), "halcyon/notes-app") || m.home.Name != "notes-app" {
-		t.Fatal("the space's repo should stay first")
+	if !strings.Contains(plain(m), "notes-app  this space") || m.home.Name != "notes-app" {
+		t.Fatalf("the space's repo should stay first:\n%s", plain(m))
+	}
+}
+
+func TestRepoPickerFiltersByOrg(t *testing.T) {
+	m := press(demoModel(t, tabRepo), "ctrl+t")
+	for _, r := range "oss-typ" {
+		m = press(m, string(r))
+	}
+	var labels []string
+	for _, it := range m.menuItems() {
+		labels = append(labels, it.label)
+	}
+	if strings.Join(labels, ",") != "oss-typesetting,mdtype,fonts" {
+		t.Fatalf("an org's name should keep its repos: %v", labels)
+	}
+	// Headings are skipped on the way down and up.
+	m = press(m, "down", "down", "down", "up", "up", "up")
+	if m.menuItems()[m.menuCursor].header {
+		t.Fatal("cursor landed on a heading")
+	}
+}
+
+func TestRepoPickerAddsGitHubReposWhenTheyArrive(t *testing.T) {
+	m := demoModel(t, tabRepo)
+	next, _ := m.openRepoPicker()
+	m = next.(model)
+	// Only the local choices so far.
+	next, _ = m.Update(m.loadRepoChoices()())
+	m = next.(model)
+	if strings.Contains(plain(m), "dotfiles") || !strings.Contains(plain(m), "loading yours") {
+		t.Fatalf("before GitHub answers:\n%s", plain(m))
+	}
+	m = press(m, "down") // onto sync-server
+	next, _ = m.Update(m.loadRemoteRepos()())
+	m = next.(model)
+	if !strings.Contains(plain(m), "dotfiles") || m.menuItems()[m.menuCursor].label != "sync-server" {
+		t.Fatalf("after GitHub answers, cursor on %q:\n%s", m.menuItems()[m.menuCursor].label, plain(m))
 	}
 }
 

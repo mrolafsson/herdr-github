@@ -32,6 +32,8 @@ type source interface {
 	merge(ctx context.Context, d *prDetail, method string, auto bool) error
 	disableAutoMerge(ctx context.Context, d *prDetail) error
 	deleteBranch(ctx context.Context, d *prDetail) error
+	// repos are the repos you can reach, for the repo picker.
+	repos(ctx context.Context) ([]repoInfo, error)
 }
 
 // githubSource talks to every configured host, one client per host.
@@ -178,4 +180,22 @@ func (s *githubSource) deleteBranch(ctx context.Context, d *prDetail) error {
 func isPartial(err error) bool {
 	var p *partialError
 	return errors.As(err, &p)
+}
+
+// repos asks every host for your repos; a host that fails is left out
+// unless all do.
+func (s *githubSource) repos(ctx context.Context) ([]repoInfo, error) {
+	var all []repoInfo
+	var firstErr error
+	for _, h := range s.cfg.Hosts {
+		rs, err := s.client(h).viewerRepos(ctx)
+		all = append(all, rs...)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if len(all) > 0 {
+		return all, nil
+	}
+	return nil, firstErr
 }

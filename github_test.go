@@ -332,3 +332,23 @@ func TestRepoTabWithoutRepoIsEmpty(t *testing.T) {
 		t.Fatal("no repo: nothing to list, and no error")
 	}
 }
+
+func TestViewerReposPages(t *testing.T) {
+	calls := 0
+	fakeGitHub(t, func(w http.ResponseWriter, r *http.Request) {
+		req := decodeReq(t, r)
+		calls++
+		if !strings.Contains(req.Query, "ORGANIZATION_MEMBER") || !strings.Contains(req.Query, "isArchived: false") {
+			t.Errorf("query: %s", req.Query)
+		}
+		more := calls == 1
+		reply(w, map[string]any{"viewer": map[string]any{"repositories": map[string]any{
+			"pageInfo": map[string]any{"hasNextPage": more, "endCursor": "c"},
+			"nodes":    []any{map[string]any{"nameWithOwner": "acme/app", "pushedAt": "2026-09-20T10:00:00Z"}, map[string]any{"nameWithOwner": "bad"}},
+		}}})
+	})
+	rs, err := newClient("github.com").viewerRepos(context.Background())
+	if err != nil || len(rs) != 2 || rs[0].Repo != (repoRef{"github.com", "acme", "app"}) || rs[0].Pushed.IsZero() {
+		t.Fatalf("%+v %v", rs, err)
+	}
+}

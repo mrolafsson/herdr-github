@@ -238,8 +238,8 @@ func (d *demoSource) setHome(r repoRef) {
 	d.home = r
 }
 
-// repos are the demo org's repos, as if each had a herdr space.
-func (d *demoSource) repos() []repoRef {
+// spaceRepos are the demo org's repos with PRs, as if each had a herdr space.
+func (d *demoSource) spaceRepos() []repoRef {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var out []repoRef
@@ -247,6 +247,21 @@ func (d *demoSource) repos() []repoRef {
 		out = append(out, p.repo())
 	}
 	return out
+}
+
+// The demo's GitHub: its own repos, plus a few you'd reach through other
+// orgs and your own account.
+func (d *demoSource) repos(context.Context) ([]repoInfo, error) {
+	now := nowFn()
+	var out []repoInfo
+	for i, r := range []string{
+		"halcyon/notes-app", "halcyon/sync-server", "halcyon/design-system", "halcyon/website", "halcyon/infra",
+		"sam/dotfiles", "sam/notes-cli", "oss-typesetting/mdtype", "oss-typesetting/fonts",
+	} {
+		owner, name, _ := strings.Cut(r, "/")
+		out = append(out, repoInfo{repoRef{"github.com", owner, name}, now.Add(-time.Duration(i) * 6 * time.Hour)})
+	}
+	return out, nil
 }
 
 func (d *demoSource) find(key string) *prDetail {

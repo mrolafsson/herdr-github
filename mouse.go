@@ -95,7 +95,9 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if i, ok := m.menuAt(ev.Y); ok {
-			m.menuCursor = i
+			if !m.menuItems()[i].header {
+				m.menuCursor = i
+			}
 		} else if i, ok := m.rowAt(ev.Y); ok {
 			m.cursor = i
 		}
@@ -112,7 +114,7 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		switch {
 		case m.menu != nil:
-			m.menuCursor = max(0, min(m.menuCursor+delta, len(m.menuItems())-1))
+			m.moveMenu(delta)
 		case m.screen == screenList:
 			m.move(delta)
 		default:

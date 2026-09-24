@@ -195,6 +195,13 @@ type model struct {
 	menuCursor int
 	menuOpened time.Time // clicks right after this belong to the click that opened it
 
+	// The repo picker's choices (repopicker.go): what's here, and what you
+	// can reach on GitHub, fetched once per popup.
+	repoLocal     []repoChoice
+	repoRemote    []repoInfo
+	remoteLoaded  bool
+	remoteLoading bool
+
 	mouseX, mouseY int // last pointer position; -1 until the mouse moves
 }
 
@@ -430,10 +437,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case repoChoicesMsg:
+		m.repoLocal = msg
 		if m.mode == modeSignedOut || m.menu != nil {
 			return m, nil
 		}
-		return m.openMenu(m.repoMenu(msg)), nil
+		return m.openMenu(m.repoMenu()), nil
+
+	case remoteReposMsg:
+		m.remoteLoading, m.remoteLoaded = false, true
+		m.repoRemote = msg.repos
+		if msg.err != nil && len(msg.repos) == 0 {
+			m.flash = "" // the picker still has the local repos
+			m.err = "Couldn't list your GitHub repos: " + msg.err.Error()
+		}
+		return m.refreshRepoMenu(), nil
 
 	case loginDoneMsg:
 		if msg.err != nil {
@@ -1055,6 +1072,7 @@ func (m model) currentFooter() []hint {
 // menu is a short list of choices shown over the current screen: how to
 // merge, what to clean up afterwards, whether to clone, which repo.
 type menu struct {
+	id     string // which menu this is, for replacing it while it's open
 	title  string
 	items  []menuItem
 	cursor int // where the cursor starts: a confirmation starts on Cancel
@@ -1070,11 +1088,51 @@ type menuItem struct {
 	label  string
 	detail string
 	run    func(m model) (tea.Model, tea.Cmd)
+	header bool   // a group heading: shown, never chosen
+	search string // what the filter matches, if not label and detail
+}
+
+func (it menuItem) haystack() string {
+	if it.search != "" {
+		return strings.ToLower(it.search)
+	}
+	return strings.ToLower(it.label + " " + it.detail)
 }
 
 func (m model) openMenu(mn *menu) model {
 	m.menu, m.menuCursor, m.flash, m.menuOpened = mn, mn.cursor, "", time.Now()
+	m.menuCursor = m.selectable(m.menuCursor, 1)
 	return m
+}
+
+// selectable is the first item from i on, going by step, that isn't a
+// heading; i itself when there's none that way.
+func (m model) selectable(i, step int) int {
+	items := m.menuItems()
+	for j := i; j >= 0 && j < len(items); j += step {
+		if !items[j].header {
+			return j
+		}
+	}
+	if step > 0 {
+		return m.selectable(min(i, len(items)-1), -1)
+	}
+	return max(0, i)
+}
+
+func (m *model) moveMenu(delta int) {
+	n := len(m.menuItems())
+	if n == 0 {
+		return
+	}
+	step := 1
+	if delta < 0 {
+		step = -1
+	}
+	next := m.selectable(min(max(0, m.menuCursor+delta), n-1), step)
+	if items := m.menuItems(); next >= 0 && next < n && !items[next].header {
+		m.menuCursor = next
+	}
 }
 
 // menuClickGuard is how long a new menu ignores clicks: the second click of a
@@ -1091,20 +1149,40 @@ func (m model) menuItems() []menuItem {
 		return mn.items
 	}
 	var out []menuItem
-	for _, it := range mn.items {
-		hay := strings.ToLower(it.label + " " + it.detail)
-		ok := true
-		for _, w := range strings.Fields(strings.ToLower(mn.query)) {
-			ok = ok && strings.Contains(hay, w)
-		}
-		if ok {
-			out = append(out, it)
-		}
-	}
 	if mn.typed != nil {
 		if it := mn.typed(mn.query); it != nil {
 			out = append(out, *it)
 		}
+	}
+	// A heading stays while anything under it matches; matching the
+	// heading (an org's name) keeps everything under it.
+	var head *menuItem
+	headShown, headMatch := false, false
+	matches := func(hay string) bool {
+		for _, w := range strings.Fields(strings.ToLower(mn.query)) {
+			if !strings.Contains(hay, w) {
+				return false
+			}
+		}
+		return true
+	}
+	for i := range mn.items {
+		it := mn.items[i]
+		if it.header {
+			head, headShown, headMatch = &mn.items[i], false, matches(it.haystack())
+			continue
+		}
+		hay := it.haystack()
+		if head != nil {
+			hay += " " + head.haystack()
+		}
+		if !headMatch && !matches(hay) {
+			continue
+		}
+		if head != nil && !headShown {
+			out, headShown = append(out, *head), true
+		}
+		out = append(out, it)
 	}
 	return out
 }
@@ -1119,9 +1197,13 @@ func (m model) handleMenuKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.menu = nil
 		}
 	case "up", "ctrl+p":
-		m.menuCursor = max(0, m.menuCursor-1)
+		m.moveMenu(-1)
 	case "down", "ctrl+n":
-		m.menuCursor = max(0, min(n-1, m.menuCursor+1))
+		m.moveMenu(1)
+	case "pgup":
+		m.moveMenu(-max(1, m.listHeight()-menuTop))
+	case "pgdown":
+		m.moveMenu(max(1, m.listHeight()-menuTop))
 	case "enter":
 		return m.chooseMenu(m.menuCursor)
 	case "backspace":
@@ -1138,9 +1220,9 @@ func (m model) handleMenuKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case s == "q":
 			m.menu = nil
 		case s == "k":
-			m.menuCursor = max(0, m.menuCursor-1)
+			m.moveMenu(-1)
 		case s == "j":
-			m.menuCursor = min(n-1, m.menuCursor+1)
+			m.moveMenu(1)
 		case len(s) == 1 && s[0] >= '1' && s[0] <= '9' && int(s[0]-'1') < n:
 			return m.chooseMenu(int(s[0] - '1'))
 		}
@@ -1154,11 +1236,12 @@ func (m *model) setMenuQuery(q string) {
 	mn := *m.menu
 	mn.query = q
 	m.menu, m.menuCursor = &mn, 0
+	m.menuCursor = m.selectable(0, 1)
 }
 
 func (m model) chooseMenu(i int) (tea.Model, tea.Cmd) {
 	items := m.menuItems()
-	if i < 0 || i >= len(items) {
+	if i < 0 || i >= len(items) || items[i].header {
 		return m, nil
 	}
 	it := items[i]
@@ -1192,6 +1275,10 @@ func (m model) viewMenu(room int) string {
 	start := m.menuStart(room)
 	for i := start; i < len(items) && i-start < room-menuTop; i++ {
 		it := items[i]
+		if it.header {
+			b.WriteString(" " + styleDim.Render(shorten(it.label, max(10, m.width-2))) + "\n")
+			continue
+		}
 		num := fmt.Sprint(i + 1)
 		if m.menu.filterable {
 			num = "·"

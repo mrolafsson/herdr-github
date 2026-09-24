@@ -2,7 +2,9 @@ package main
 
 import (
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -37,7 +39,7 @@ func (m model) loadRepoChoices() tea.Cmd {
 			if here != nil {
 				out = append(out, repoChoice{*here, "this space"})
 			}
-			for _, r := range d.repos() {
+			for _, r := range d.spaceRepos() {
 				out = append(out, repoChoice{r, "a herdr space"})
 			}
 			return repoChoicesMsg(dedupeChoices(append(out, fromLists...)))
@@ -80,35 +82,131 @@ func dedupeChoices(cs []repoChoice) []repoChoice {
 	return out
 }
 
-// repoMenu is the picker: the choices, filtered as you type, plus whatever
-// owner/repo (or host/owner/repo) you type that isn't among them.
-func (m model) repoMenu(choices []repoChoice) *menu {
-	mn := &menu{title: "Pull requests of which repo?", filterable: true}
-	for _, c := range choices {
-		c := c
-		label := c.repo.String()
-		if c.repo.Host != "github.com" {
-			label = c.repo.Host + "/" + label
-		}
-		note := c.note
-		if m.repo != nil && c.repo.same(*m.repo) {
-			note += " · showing"
-		}
-		mn.items = append(mn.items, menuItem{label: label, detail: note, run: func(m model) (tea.Model, tea.Cmd) {
-			return m.switchRepo(c.repo)
-		}})
+// remoteReposMsg brings the repos you can reach on GitHub.
+type remoteReposMsg struct {
+	repos []repoInfo
+	err   error
+}
+
+func (m model) loadRemoteRepos() tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		rs, err := client.repos(ctx)
+		return remoteReposMsg{rs, err}
 	}
+}
+
+// repoEntry is a repo in the picker: from here (a space, a recent pick, a
+// PR list; rank orders those) and/or from GitHub (pushed).
+type repoEntry struct {
+	repo   repoRef
+	note   string
+	rank   int // position among the local choices; -1: GitHub's only
+	pushed time.Time
+}
+
+// repoMenu is the picker, grouped by owner (org or user): this space's org
+// first, then the orgs of your spaces, picks and PRs, then the rest of what
+// you can reach on GitHub, most recently pushed first. Within an org, the
+// same order. Typing filters; an org's name keeps its whole group; an
+// owner/repo that isn't listed is offered as typed.
+func (m model) repoMenu() *menu {
+	title := "Pull requests of which repo?"
+	if !m.remoteLoaded {
+		title += " (loading yours from GitHub…)"
+	}
+	mn := &menu{id: "repos", title: title, filterable: true}
+
+	byKey := map[string]*repoEntry{}
+	var entries []*repoEntry
+	for i, c := range m.repoLocal {
+		e := &repoEntry{repo: c.repo, note: c.note, rank: i}
+		byKey[c.repo.key()] = e
+		entries = append(entries, e)
+	}
+	for _, r := range m.repoRemote {
+		if e, ok := byKey[r.Repo.key()]; ok {
+			e.pushed = r.Pushed
+			continue
+		}
+		e := &repoEntry{repo: r.Repo, rank: -1, pushed: r.Pushed}
+		byKey[r.Repo.key()] = e
+		entries = append(entries, e)
+	}
+
+	type group struct {
+		name    string
+		entries []*repoEntry
+		rank    int // best local rank, -1 if none
+		pushed  time.Time
+	}
+	groups := map[string]*group{}
+	var order []*group
+	for _, e := range entries {
+		k := strings.ToLower(e.repo.Host + "/" + e.repo.Owner)
+		g, ok := groups[k]
+		if !ok {
+			name := e.repo.Owner
+			if e.repo.Host != "github.com" {
+				name = e.repo.Host + "/" + name
+			}
+			g = &group{name: name, rank: -1}
+			groups[k] = g
+			order = append(order, g)
+		}
+		g.entries = append(g.entries, e)
+		if e.rank >= 0 && (g.rank < 0 || e.rank < g.rank) {
+			g.rank = e.rank
+		}
+		if e.pushed.After(g.pushed) {
+			g.pushed = e.pushed
+		}
+	}
+	before := func(ra, rb int, pa, pb time.Time, na, nb string) bool {
+		switch {
+		case ra >= 0 && rb >= 0 && ra != rb:
+			return ra < rb
+		case (ra >= 0) != (rb >= 0):
+			return ra >= 0
+		case !pa.Equal(pb):
+			return pa.After(pb)
+		}
+		return strings.ToLower(na) < strings.ToLower(nb)
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		a, b := order[i], order[j]
+		return before(a.rank, b.rank, a.pushed, b.pushed, a.name, b.name)
+	})
+
+	for _, g := range order {
+		sort.SliceStable(g.entries, func(i, j int) bool {
+			a, b := g.entries[i], g.entries[j]
+			return before(a.rank, b.rank, a.pushed, b.pushed, a.repo.Name, b.repo.Name)
+		})
+		mn.items = append(mn.items, menuItem{label: g.name, header: true})
+		for _, e := range g.entries {
+			r := e.repo
+			note := e.note
+			if m.repo != nil && r.same(*m.repo) {
+				note = strings.TrimPrefix(note+" · showing", " · ")
+			}
+			if note == "" && !e.pushed.IsZero() {
+				note = "pushed " + ago(e.pushed)
+			}
+			mn.items = append(mn.items, menuItem{
+				label: r.Name, detail: note, search: r.Owner + "/" + r.Name + " " + note,
+				run: func(m model) (tea.Model, tea.Cmd) { return m.switchRepo(r) },
+			})
+		}
+	}
+
 	host := m.cfg.Hosts[0]
 	if m.repo != nil {
 		host = m.repo.Host
 	}
-	known := map[string]bool{}
-	for _, c := range choices {
-		known[c.repo.key()] = true
-	}
 	mn.typed = func(q string) *menuItem {
 		r, ok := typedRepo(strings.TrimSpace(q), host)
-		if !ok || known[r.key()] || !m.cfg.knownHost(r.Host) {
+		if !ok || byKey[r.key()] != nil || !m.cfg.knownHost(r.Host) {
 			return nil
 		}
 		return &menuItem{label: r.String(), detail: "as typed", run: func(m model) (tea.Model, tea.Cmd) {
@@ -116,6 +214,29 @@ func (m model) repoMenu(choices []repoChoice) *menu {
 		}}
 	}
 	return mn
+}
+
+// refreshRepoMenu redraws an open picker with what's now known, keeping the
+// filter and the repo the cursor was on.
+func (m model) refreshRepoMenu() model {
+	if m.menu == nil || m.menu.id != "repos" {
+		return m
+	}
+	items := m.menuItems()
+	on := ""
+	if m.menuCursor < len(items) {
+		on = items[m.menuCursor].search
+	}
+	mn := m.repoMenu()
+	mn.query = m.menu.query
+	m.menu = mn
+	m.menuCursor = m.selectable(0, 1)
+	for i, it := range m.menuItems() {
+		if on != "" && it.search == on {
+			m.menuCursor = i
+		}
+	}
+	return m
 }
 
 var repoNamePart = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -141,10 +262,16 @@ func parseRepoKey(k string) (repoRef, bool) {
 	return r, r.valid()
 }
 
-// openRepoPicker opens the picker once the choices are gathered.
+// openRepoPicker opens the picker once the local choices are gathered; your
+// GitHub repos join it when they arrive (once per popup).
 func (m model) openRepoPicker() (tea.Model, tea.Cmd) {
 	m.flash, m.err = "", ""
-	return m, m.loadRepoChoices()
+	cmds := []tea.Cmd{m.loadRepoChoices()}
+	if !m.remoteLoaded && !m.remoteLoading {
+		m.remoteLoading = true
+		cmds = append(cmds, m.loadRemoteRepos())
+	}
+	return m, tea.Batch(cmds...)
 }
 
 // switchRepo points the repo tab at r for this popup and loads its PRs.

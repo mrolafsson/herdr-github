@@ -2,11 +2,11 @@
 
 ## 0.1.0 — unreleased
 
-- The repo tab can show any repo: **ctrl+t** (or a click on the tab) picks
-  from this space's repo, recent picks, every herdr space's repo and the
-  repos your PRs are in, or takes a typed `owner/repo`. It starts on the
-  space's repo each time.
-
+- The repo tab can show any repo: **ctrl+t** (or a click on the tab) opens
+  a picker grouped by organisation, with this space's repo, recent picks,
+  every herdr space's repo, the repos your PRs are in, and every repo you
+  can reach on GitHub; or a typed `owner/repo`. It starts on the space's
+  repo each time.
 - First version: Mine, Review requested and this repo's pull requests; the PR
   screen with merge readiness, checks, reviewers, description, unresolved
   threads and conversation; draft ↔ ready; merge with confirmation, or

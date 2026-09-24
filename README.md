@@ -111,10 +111,17 @@ popup reopens on the tab you left.
 
 **Another repo.** The third tab starts on the repo of the space you opened
 the popup from. **ctrl+t** (or a click on that tab while you're on it) opens
-a picker: this space's repo, the ones you picked lately, every herdr space's
-repo, and the repos your PRs are in. Type to filter, or type any
-`owner/repo` (or `host/owner/repo`) to open that one. The pick lasts for the
-popup; next time it opens on the space's repo again.
+a picker, **grouped by organisation**:
+
+- this space's org first, with its repo on top;
+- then the orgs of your recent picks, your herdr spaces and your PRs;
+- then every other repo you can reach on GitHub (your own, your orgs',
+  ones you collaborate on; archived ones left out), most recently pushed
+  first. These arrive a moment after the picker opens.
+
+Type to filter: an org's name keeps its whole group. Any `owner/repo` (or
+`host/owner/repo`) that isn't listed is offered as typed. The pick lasts for
+the popup; next time it opens on the space's repo again.
 
 **Type to filter**: every word must match the number, title, repo, author,
 branch or a label, so `sync bug` finds *#482 Offline edits…*.
