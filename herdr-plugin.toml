@@ -1,6 +1,6 @@
 id = "herdr-github"
 name = "GitHub"
-version = "0.1.0"
+version = "0.1.1"
 min_herdr_version = "0.9.0"
 description = "Your pull requests in a herdr popup: merge readiness, checks, reviews and the conversation; toggle draft, merge (or auto-merge), and one key to a worktree for any PR, forks included. Every space and agent gets its branch's PR as a sidebar label. Uses gh's sign-in."
 platforms = ["macos"]
@@ -42,6 +42,8 @@ command = ["./bin/herdr-github", "action", "labels"]
 id = "picker"
 title = "GitHub"
 placement = "popup"
+width = "85%"
+height = "80%"
 command = ["./bin/herdr-github", "picker"]
 
 # Sidebar labels. `tick` sets the $pr, $pr_badge, $pr_state, $pr_checks and

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 )
 
 const usage = `herdr-github — GitHub pull requests in herdr
@@ -27,7 +28,7 @@ const usage = `herdr-github — GitHub pull requests in herdr
 `
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "herdr-github:", err)
@@ -95,13 +96,13 @@ func runAction(ctx context.Context, cfg config, name string) error {
 		if cwd == "" {
 			cwd = inv.FocusedPaneCwd
 		}
-		if err := openPopup("picker", "85%", "80%", map[string]string{"HERDR_GITHUB_CWD": cwd}); err != nil {
+		if err := openPicker(map[string]string{"HERDR_GITHUB_CWD": cwd}); err != nil {
 			notify("GitHub", "Couldn't open the picker: "+err.Error())
 			return err
 		}
 		return nil
 	case "demo":
-		if err := openPopup("picker", "85%", "80%", map[string]string{"HERDR_GITHUB_DEMO": "1"}); err != nil {
+		if err := openPicker(map[string]string{"HERDR_GITHUB_DEMO": "1"}); err != nil {
 			notify("GitHub", "Couldn't open the demo: "+err.Error())
 			return err
 		}

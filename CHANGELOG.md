@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 — 2026-09-25
+
+- Opening the picker while an earlier one is still up (left open on another
+  herdr client, where you can't see it) closes that one and opens it where
+  you are, instead of failing with *a popup pane is already open*. Another
+  plugin's popup is left alone, with a toast saying so.
+- The popup's size is in the manifest, so it's the same however it's
+  opened.
+
 ## 0.1.0 — 2026-09-24
 
 First version.
