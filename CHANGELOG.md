@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 — 2026-09-26
+
+- Linux. The browser opens with `xdg-open`; copying uses `wl-copy`, `xclip`
+  or `xsel`. Releases include Linux binaries, and `scripts/build.sh`
+  downloads them on machines without Go.
+- Over SSH, or on Linux with no display, `o` copies the link instead of
+  opening a browser you couldn't see, and every copy asks your terminal to
+  set its clipboard (OSC 52) instead of the remote machine's.
+- Opening the browser and copying have time limits, so neither can hang the
+  picker.
+
 ## 0.1.1 — 2026-09-25
 
 - Opening the picker while an earlier one is still up (left open on another
