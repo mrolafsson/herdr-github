@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"net/url"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -130,16 +129,16 @@ func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		m.openURL(pr.URL)
 	case "y":
-		if err := copyText(pr.URL); err != nil {
+		if term, err := copyText(pr.URL); err != nil {
 			m.err = err.Error()
 		} else {
-			m.flash = "Copied " + pr.URL
+			m.flash = copied(pr.URL, term)
 		}
 	case "b":
-		if err := copyText(localBranch(pr)); err != nil {
+		if term, err := copyText(localBranch(pr)); err != nil {
 			m.err = err.Error()
 		} else {
-			m.flash = "Copied " + localBranch(pr)
+			m.flash = copied(localBranch(pr), term)
 		}
 	case "w", "enter":
 		return m.runWorktree(pr, false)
@@ -448,13 +447,23 @@ func (m *model) openURL(u string) {
 		m.err = "Not opening " + u + ": not a link to your GitHub"
 		return
 	}
-	if err := exec.Command("open", u).Run(); err != nil {
+	// A browser here wouldn't be in front of you (over SSH), or there's none
+	// to open (no display): the link goes on your clipboard instead.
+	if noBrowser() {
+		if term, err := copyText(u); err != nil {
+			m.err = "Couldn't copy the link: " + err.Error()
+		} else {
+			m.flash = copied("the link", term) + ": open it in your browser"
+		}
+		return
+	}
+	if err := browse(u); err != nil {
 		m.err = "Couldn't open the browser: " + err.Error()
 	}
 }
 
 // isGitHubURL admits https links on a configured GitHub host only. The URL
-// comes from the API and goes to macOS `open`, which would as happily launch
+// comes from the API and goes to `open` or `xdg-open`, which would as happily launch
 // a file: path or another app's URL scheme.
 func (m model) isGitHubURL(u string) bool {
 	p, err := url.Parse(u)
@@ -462,12 +471,6 @@ func (m model) isGitHubURL(u string) bool {
 		return false
 	}
 	return m.cfg.knownHost(p.Hostname())
-}
-
-func copyText(s string) error {
-	cmd := exec.Command("pbcopy")
-	cmd.Stdin = strings.NewReader(s)
-	return cmd.Run()
 }
 
 func ago(t time.Time) string {

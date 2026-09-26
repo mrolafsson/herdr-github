@@ -38,7 +38,9 @@ the PR in the sidebar: `#482 ✓ approved`.
 
 ## Requirements
 
-- **herdr 0.9.0** or later, on **macOS**.
+- **herdr 0.9.0** or later, on **macOS** or **Linux** (arm64 or x86-64). On
+  Linux, `xdg-open` opens the browser, and copying needs `wl-copy`, `xclip`
+  or `xsel`.
 - **[gh](https://cli.github.com)**, signed in (`gh auth login`). The plugin
   borrows its token.
 - **git**, for worktrees.
@@ -373,6 +375,14 @@ spliced into a query. "Open on GitHub" only opens `https` links on your
 configured hosts.
 
 ## Troubleshooting
+
+**Over SSH, "open" copies the link instead.** A browser opened on the remote
+machine wouldn't be in front of you (on Linux with no display there's none to
+open), so `o` puts the link on your clipboard to open yourself. Over SSH,
+copying (`o`, `y`, `b`) asks your terminal to set its clipboard (OSC 52)
+rather than the remote machine's. If the popup says it sent something to your
+terminal's clipboard but it isn't there, your terminal, or a multiplexer
+between you and it, doesn't allow that.
 
 **The key does nothing.** `herdr plugin action invoke herdr-github.open`
 tells you whether the plugin works. If it does, it's the key: with

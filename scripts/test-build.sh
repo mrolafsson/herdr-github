@@ -11,12 +11,14 @@ cp "$here/scripts/build.sh" "$t/repo/scripts/"
 cp "$here/herdr-plugin.toml" "$t/repo/"
 
 version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$t/repo/herdr-plugin.toml" | head -n 1)
-case "$(uname -m)" in arm64 | aarch64) arch=arm64 ;; *) arch=amd64 ;; esac
-archive="herdr-github_${version}_darwin_$arch.tar.gz"
+case "$(uname -s)" in Darwin) os=darwin ;; Linux) os=linux ;; *) echo "skip: no release for $(uname -s)"; exit 0 ;; esac
+case "$(uname -m)" in arm64 | aarch64) arch=arm64 ;; x86_64 | amd64) arch=amd64 ;; *) echo "skip: no release for $(uname -m)"; exit 0 ;; esac
+archive="herdr-github_${version}_${os}_$arch.tar.gz"
 printf '#!/bin/sh\necho stand-in binary\n' > "$t/release/herdr-github"
 chmod +x "$t/release/herdr-github"
 echo "not the binary" > "$t/release/extra-file"
-(cd "$t/release" && tar -czf "$archive" herdr-github extra-file && shasum -a 256 "$archive" > checksums.txt)
+sum() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+(cd "$t/release" && tar -czf "$archive" herdr-github extra-file && sum "$archive" > checksums.txt)
 
 # The stand-in curl answers a URL with the release file of the same name.
 cat > "$t/stub/curl" <<EOF
@@ -26,7 +28,10 @@ while [ \$# -gt 0 ]; do case "\$1" in -o) out="\$2"; shift ;; https://*) url="\$
 cp "$t/release/\$(basename "\$url")" "\$out"
 EOF
 chmod +x "$t/stub/curl"
-nogo="$t/stub:/usr/bin:/bin" # a PATH with no Go on it
+# The stand-in curl first on PATH; the download path forced, as Go may be in
+# /usr/bin.
+nogo="$t/stub:/usr/bin:/bin"
+export HERDR_GITHUB_PREBUILT=1
 
 if ! PATH="$nogo" sh "$t/repo/scripts/build.sh" 2>"$t/log"; then
 	echo "FAIL: build.sh refused a good release:"; cat "$t/log"; exit 1
