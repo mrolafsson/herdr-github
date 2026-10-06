@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0 — 2026-10-06
+
+- **Whose PR is this?** Every open PR knows its agents: the Claude Code
+  session that opened it, others that worked on it, and any agent in a
+  space on its branch. In the popup a PR's row names the first and counts
+  the rest, the PR screen lists them with their state, and **ctrl+g**
+  (**a** on the PR screen) or a click goes to one. A session that isn't in
+  a pane any more is listed too, and the key copies the command that
+  resumes it. An agent's name filters to its PRs. Nothing to set up;
+  `"agent_prs": false` turns it off.
+- **`$prs`**, a new sidebar token: every PR that's an agent's, in one list.
+  Its branch's PR with its status, then the others it opened, whatever
+  branch its space is on (`#1112 draft ✓ #1103 ● #1101 ✓`). It's the one
+  token an agent's row needs.
+- The README says where sidebar rows go when you're attached to another
+  machine with `herdr --remote`: in the config of the machine you're
+  sitting at.
+
 ## 0.2.0 — 2026-09-26
 
 - Linux. The browser opens with `xdg-open`; copying uses `wl-copy`, `xclip`

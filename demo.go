@@ -332,6 +332,18 @@ func (d *demoSource) removeTree(key string) {
 	delete(d.trees, key)
 }
 
+// agents: one PR's agent is in its space with another reviewing beside it,
+// and another PR's has gone.
+func (d *demoSource) agents() map[string][]prAgent {
+	return map[string][]prAgent{
+		"github.com/halcyon/notes-app#482": {
+			{Pane: "w1:p1", Name: "Offline sync conflicts", Status: "idle", Session: "demo-session-482", Part: partOpened},
+			{Pane: "w1:p2", Name: "Review the three-way merge", Status: "working", Session: "demo-session-483", Part: partBranch},
+		},
+		"github.com/halcyon/notes-app#476": {{Name: "CRDT spike", Session: "demo-session-476", Cwd: "~/code/halcyon/notes-app", Part: partOpened}},
+	}
+}
+
 func (d *demoSource) worktreeMarks() map[string]bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()

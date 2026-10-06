@@ -46,6 +46,9 @@ type worktreesMsg struct {
 	gen   int
 }
 
+// agentsMsg is each PR's agents, by openedKey.
+type agentsMsg map[string][]prAgent
+
 // noteMsg puts a line in the status line without stopping anything.
 type noteMsg string
 
@@ -176,12 +179,13 @@ type model struct {
 	host    string // the host to sign in to, on the signed-out screen
 
 	prs       map[tab][]pullRequest
-	loaded    map[tab]bool      // a list is there to show (fresh or cached)
-	stale     map[tab]bool      // it's the cached one; the fresh one is on its way
-	paging    map[tab]bool      // more pages are loading
-	tabErr    map[tab]string    // why a tab's list couldn't load
-	worktrees map[string]bool   // pr.key() → its worktree exists
-	checkouts map[string]string // repo key → local checkout
+	loaded    map[tab]bool         // a list is there to show (fresh or cached)
+	stale     map[tab]bool         // it's the cached one; the fresh one is on its way
+	paging    map[tab]bool         // more pages are loading
+	tabErr    map[tab]string       // why a tab's list couldn't load
+	worktrees map[string]bool      // pr.key() → its worktree exists
+	agents    map[string][]prAgent // openedKey → the PR's agents
+	checkouts map[string]string    // repo key → local checkout
 	cursor    int
 	offset    int
 	// wantRepoRow: you moved onto the "change repo" row, so the cursor
@@ -262,7 +266,7 @@ func (m model) settle() model {
 
 // loadAll asks for every tab at once, so switching tabs doesn't wait.
 func (m model) loadAll() tea.Cmd {
-	cmds := []tea.Cmd{m.loadTab(tabMine, ""), m.loadTab(tabReview, "")}
+	cmds := []tea.Cmd{m.loadTab(tabMine, ""), m.loadTab(tabReview, ""), m.loadAgents()}
 	if m.repo != nil {
 		cmds = append(cmds, m.loadTab(tabRepo, ""))
 	}
@@ -445,6 +449,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case agentsMsg:
+		m.agents = msg
+		m.clampCursor() // a filter on an agent's name now matches
+		return m, nil
+
 	case noteMsg:
 		m.err = string(msg)
 		return m, nil
@@ -606,6 +615,11 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+t":
 		return m.openRepoPicker()
+	case "ctrl+g":
+		if r := m.selected(); r != nil {
+			return m.goToAgent(*r.pr)
+		}
+		return m, nil
 	case "enter":
 		if m.onRepoRow() {
 			return m.openRepoPicker()
@@ -756,7 +770,7 @@ func (m model) rows() []row {
 	list := m.prs[m.tab]
 	for i := range list {
 		pr := &list[i]
-		if !pr.matches(q) {
+		if !pr.matches(q, agentNames(m.agentsOf(*pr))) {
 			continue
 		}
 		group := m.groupOf(*pr)
@@ -1052,11 +1066,21 @@ func (m model) viewRow(r row, selected bool) string {
 		}
 		return m.fitRow(left, name, styleDim.Render(hint), w, selected)
 	}
-	pr := r.pr
+	hot := selected && m.pointerOnAgent(r.pr)
+	left, right, _ := m.rowParts(r.pr, hot)
+	return m.fitRow(left, r.pr.Title, right, w, selected)
+}
+
+// rowParts are the two ends of a PR's row: what's left of its title, and the
+// meta right of it, which starts with its agent, agentW cells wide.
+func (m model) rowParts(pr *pullRequest, hot bool) (left, right string, agentW int) {
 	num := fmt.Sprintf("#%-*d", m.numWidth(), pr.Number)
-	left := " " + prIcon(*pr) + " " + styleDim.Render(num) + " "
+	left = " " + prIcon(*pr) + " " + styleDim.Render(num) + " "
 
 	var meta []string
+	if a := m.rowAgent(*pr, hot); a != "" {
+		meta, agentW = append(meta, a), lipgloss.Width(a)
+	}
 	if m.tab != tabMine {
 		meta = append(meta, styleDim.Render(pr.author()))
 	}
@@ -1074,13 +1098,35 @@ func (m model) viewRow(r row, selected bool) string {
 	if c := checksBadge(pr.checks()); c != "" {
 		meta = append(meta, c)
 	}
-	right := strings.Join(meta, styleDim.Render(" · "))
+	right = strings.Join(meta, styleDim.Render(" · "))
 	if m.worktrees[pr.key()] {
 		right += " " + styleTree.Render("⌥")
 	} else {
 		right += "  "
 	}
-	return m.fitRow(left, pr.Title, right, w, selected)
+	return left, right, agentW
+}
+
+// agentSpan is where on its row a PR's agent is drawn, as fitRow lays the
+// row out: the columns a click on goes to the agent rather than the PR.
+func (m model) agentSpan(pr *pullRequest) (from, to int, ok bool) {
+	left, right, agentW := m.rowParts(pr, false)
+	lw, rw := lipgloss.Width(left), lipgloss.Width(right)
+	if agentW == 0 || m.width-lw-rw-2 < 8 { // no agent, or no room for the meta
+		return 0, 0, false
+	}
+	from = m.width - 1 - rw
+	return from, from + agentW, true
+}
+
+// pointerOnAgent says whether the mouse is over pr's agent in the list.
+func (m model) pointerOnAgent(pr *pullRequest) bool {
+	i, ok := m.rowAt(m.mouseY)
+	if !ok || m.rows()[i].pr != pr {
+		return false
+	}
+	from, to, ok := m.agentSpan(pr)
+	return ok && m.mouseX >= from && m.mouseX < to
 }
 
 // numWidth is the width of the longest PR number in the tab, so titles line up.
@@ -1130,6 +1176,9 @@ func (m model) currentFooter() []hint {
 		return m.detailFooter()
 	}
 	hs := []hint{{"enter details", "enter"}, {"^w worktree", "ctrl+w"}, {"^s start", "ctrl+s"}, {"^o open", "ctrl+o"}}
+	if r := m.selected(); r != nil && len(m.agentsOf(*r.pr)) > 0 {
+		hs = append(hs, hint{"^g " + plural(len(m.agentsOf(*r.pr)), "agent", "agents"), "ctrl+g"})
+	}
 	if m.tab == tabRepo {
 		hs = append(hs, hint{"^t repo", "ctrl+t"})
 	}

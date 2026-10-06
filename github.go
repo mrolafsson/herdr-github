@@ -31,7 +31,12 @@ func (e *signedOutError) Unwrap() error { return errSignedOut }
 // partialError: GitHub answered, but with errors for part of the answer (a
 // repo in an org whose SAML sign-on the token lacks, say). What came back is
 // used; the error says what's missing.
-type partialError struct{ msg string }
+type partialError struct {
+	msg string
+	// notFound: all that's missing is things that aren't there (or that you
+	// can't see), as opposed to GitHub not managing to answer.
+	notFound bool
+}
 
 func (e *partialError) Error() string { return e.msg }
 
@@ -128,8 +133,10 @@ func (pr pullRequest) headOwner() string {
 	return pr.repo().Owner
 }
 
-func (pr pullRequest) matches(q string) bool {
-	hay := strings.ToLower(fmt.Sprintf("#%d %s %s %s %s", pr.Number, pr.Title, pr.Repository.NameWithOwner, pr.author(), pr.HeadRefName))
+// matches says whether every word of q is in the PR's number, title, repo,
+// author, branch or labels, or in extra (its agent's name).
+func (pr pullRequest) matches(q string, extra ...string) bool {
+	hay := strings.ToLower(fmt.Sprintf("#%d %s %s %s %s %s", pr.Number, pr.Title, pr.Repository.NameWithOwner, pr.author(), pr.HeadRefName, strings.Join(extra, " ")))
 	for _, l := range pr.Labels.Nodes {
 		hay += " " + strings.ToLower(l.Name)
 	}
@@ -368,8 +375,10 @@ func (c *ghClient) graphql(ctx context.Context, query string, vars map[string]an
 	}
 	if len(reply.Errors) > 0 {
 		msgs := make([]string, 0, len(reply.Errors))
+		notFound := true
 		for _, e := range reply.Errors {
 			msgs = append(msgs, clean(e.Message, false))
+			notFound = notFound && e.Type == "NOT_FOUND"
 		}
 		msg := "GitHub: " + strings.Join(msgs, "; ")
 		if out == nil || len(reply.Data) == 0 || string(reply.Data) == "null" {
@@ -379,7 +388,7 @@ func (c *ghClient) graphql(ctx context.Context, query string, vars map[string]an
 			return errors.New(msg)
 		}
 		sanitize(out)
-		return &partialError{msg}
+		return &partialError{msg, notFound}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("GitHub: HTTP %d", resp.StatusCode)
@@ -699,6 +708,46 @@ func (c *ghClient) prsForBranches(ctx context.Context, r repoRef, heads []branch
 	for i, h := range heads {
 		if s, ok := pickPR(res.Repository[fmt.Sprintf("b%d", i)].Nodes, h.Owner); ok {
 			out[h] = s
+		}
+	}
+	return out, nil
+}
+
+// prsByNumber is the status of pull requests in one repo, in a single query.
+// One that isn't there (or a repo that isn't) is left out.
+func (c *ghClient) prsByNumber(ctx context.Context, r repoRef, numbers []int) (map[int]prStatus, error) {
+	if len(numbers) == 0 {
+		return nil, nil
+	}
+	var b strings.Builder
+	b.WriteString("query($owner: String!, $name: String!")
+	vars := map[string]any{"owner": r.Owner, "name": r.Name}
+	for i, n := range numbers {
+		fmt.Fprintf(&b, ", $n%d: Int!", i)
+		vars[fmt.Sprintf("n%d", i)] = n
+	}
+	b.WriteString(") { repository(owner: $owner, name: $name) {")
+	for i := range numbers {
+		fmt.Fprintf(&b, ` n%[1]d: pullRequest(number: $n%[1]d) {
+  number state isDraft reviewDecision mergeable url headRepositoryOwner { login }
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+  autoMergeRequest { enabledAt }
+}`, i)
+	}
+	b.WriteString(" } }")
+	var res struct {
+		Repository map[string]*prStatus `json:"repository"`
+	}
+	// Any other partial answer is a failure: a PR GitHub didn't answer for
+	// would read as gone.
+	var partial *partialError
+	if err := c.graphql(ctx, b.String(), vars, &res); err != nil && !(errors.As(err, &partial) && partial.notFound) {
+		return nil, err
+	}
+	out := map[int]prStatus{}
+	for i, n := range numbers {
+		if s := res.Repository[fmt.Sprintf("n%d", i)]; s != nil {
+			out[n] = *s
 		}
 	}
 	return out, nil

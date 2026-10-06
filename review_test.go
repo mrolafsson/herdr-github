@@ -185,7 +185,7 @@ func TestOfflineBranchSwitchDropsTheOldLabel(t *testing.T) {
 	if r := reportFor(h.takeReports(), "workspace_id", "w1"); r == nil {
 		t.Fatal("not labelled")
 	}
-	h.workspaces[0].Tokens = map[string]string{"pr": "#12", "pr_badge": "#12", "pr_state": "open"}
+	h.workspaces[0].Tokens = map[string]string{"pr": "#12", "pr_badge": "#12", "pr_state": "open", "prs": "#12"}
 	sh(t, feat.Worktree.Path, "git", "switch", "-q", "-c", "other")
 	branchLookupFn = func(context.Context, repoRef, []branchHead) (map[branchHead]prStatus, error) {
 		return nil, errors.New("offline")

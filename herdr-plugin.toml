@@ -1,8 +1,8 @@
 id = "herdr-github"
 name = "GitHub"
-version = "0.2.0"
+version = "0.3.0"
 min_herdr_version = "0.9.0"
-description = "Your pull requests in a herdr popup: merge readiness, checks, reviews and the conversation; toggle draft, merge (or auto-merge), and one key to a worktree for any PR, forks included. Every space and agent gets its branch's PR as a sidebar label. Uses gh's sign-in."
+description = "Your pull requests in a herdr popup: merge readiness, checks, reviews and the conversation; toggle draft, merge (or auto-merge), and one key to a worktree for any PR, forks included. Every space and agent gets its branch's PR as a sidebar label, and every PR lists its agents, a key away. Uses gh's sign-in."
 platforms = ["macos", "linux"]
 
 # Builds ./bin/herdr-github from source with Go, or downloads the release
@@ -47,7 +47,8 @@ height = "80%"
 command = ["./bin/herdr-github", "picker"]
 
 # Sidebar labels. `tick` sets the $pr, $pr_badge, $pr_state, $pr_checks and
-# $pr_review tokens on each space (and its agents) from its branch's PR. It
+# $pr_review tokens on each space (and its agents) from its branch's PR, and
+# $prs: that PR and the ones each agent opened, as one list. It
 # returns at once when it ran moments ago, and only asks GitHub about a repo
 # whose answer is older than label_refresh_seconds (60 by default).
 [[startup]]

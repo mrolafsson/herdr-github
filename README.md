@@ -4,7 +4,8 @@ Your GitHub pull requests in a [herdr](https://herdr.dev) popup. See what's
 waiting on you, read a PR with its checks and reviews, flip it between draft
 and ready, merge it, and land in a worktree for it (forks included) without
 leaving the terminal. Every space and agent working on a PR's branch gets
-the PR in the sidebar: `#482 ✓ approved`.
+the PR in the sidebar: `#482 ✓ approved`. And each PR knows its agents: the one that
+opened it and any that worked on it since, a key or a click away.
 
 ![Your pull requests, on the built-in demo org](docs/images/mine.png)
 
@@ -26,6 +27,10 @@ the PR in the sidebar: `#482 ✓ approved`.
 - **Start**: the worktree, plus a prompt for its new agent.
 - **Sidebar labels**: `$pr`, `$pr_badge` and friends on every space and
   agent, kept current as you work.
+- **Whose PR is this?** A PR lists the agents that opened it and worked on
+  it; a key or a click goes to one, or resumes a session that's been
+  closed. An agent's PRs, its branch's and the others it opened, are in the
+  sidebar as `$prs`.
 - Uses **gh's sign-in**: no tokens of its own, GitHub Enterprise included.
 - Keyboard first, and the mouse works. In **herdr's theme colours**.
 
@@ -108,7 +113,9 @@ bin/herdr-github picker --demo
 
 Rows show the state (`●` open, `◌` draft), the number and title, then
 `conflicts` / `changes` / `approved`, `auto` if auto-merge is on, the checks
-(`✓` passed, `✗` failed, `●` running) and `⌥` if the worktree exists. The
+(`✓` passed, `✗` failed, `●` running) and `⌥` if the worktree exists. A PR
+your agents have worked on names the first of them, and counts the rest:
+`◆ Offline sync conflicts +1` (see [A PR's agents](#a-prs-agents)). The
 popup reopens on the tab you left.
 
 **Another repo.** The third tab starts on the repo of the space you opened
@@ -129,7 +136,8 @@ Type to filter: an org's name keeps its whole group. Any `owner/repo` (or
 the popup; next time it opens on the space's repo again.
 
 **Type to filter**: every word must match the number, title, repo, author,
-branch or a label, so `sync bug` finds *#482 Offline edits…*.
+branch, a label or one of its agents, so `sync bug` finds *#482
+Offline edits…*.
 
 GitHub takes a couple of seconds per page of PRs, so the popup shows the
 lists from last time at once, marked *updating*, and swaps in the fresh ones
@@ -145,6 +153,7 @@ as they arrive; long lists fill in page by page (`Mine 20+`).
 | ctrl+w             | open or create its worktree              |
 | ctrl+s             | start: worktree, and a prompt for its agent |
 | ctrl+o             | open on GitHub                           |
+| ctrl+g             | go to its agent (a menu, if several)     |
 | ctrl+t             | pick the repo tab's repo                 |
 | ctrl+r             | refresh                                  |
 | tab, ← →           | switch tabs                              |
@@ -155,7 +164,7 @@ as they arrive; long lists fill in page by page (`Mine 20+`).
 ![A pull request](docs/images/pr.png)
 
 At the top: state, title, author, branch → base (and whether its worktree
-exists), size, labels, reviewers (`✓` approved, `✗` changes requested, `○`
+exists), its agents, size, labels, reviewers (`✓` approved, `✗` changes requested, `○`
 requested), a checks summary, and **Merge**: whether it can merge now, and
 if not, the reason GitHub is holding it: a required check failing, changes
 requested, a missing approval, conflicts, a branch that's behind.
@@ -170,6 +179,7 @@ and line, and the conversation, oldest first.
 |----------------|--------------------------------------------------|
 | `w` or enter   | open or create the worktree                      |
 | `s`            | start (see [Worktrees](#worktrees))              |
+| `a`            | go to its agent, or pick one of several (see [A PR's agents](#a-prs-agents)) |
 | `d`            | draft → ready for review, or back to draft       |
 | `m`            | merge (see [Merging](#merging))                  |
 | `o`            | open on GitHub                                   |
@@ -180,7 +190,8 @@ and line, and the conversation, oldest first.
 
 ### Mouse
 
-Hover highlights a row, a click opens it, the wheel scrolls. The tabs, the
+Hover highlights a row, a click opens it, the wheel scrolls. A click on
+an agent, in a row or on the PR screen, goes to the agent instead. The tabs, the
 footer hints and menu items are all buttons. The popup captures the mouse, so
 to select text hold **⌥** while dragging.
 
@@ -275,13 +286,37 @@ rows = [
 ]
 
 [ui.sidebar.agents]
-rows = [["state_icon", "pane", "$pr"], ["workspace"]]
+rows = [
+  ["state_icon", "terminal_title_stripped"],       # what the agent is doing
+  [{ token = "$prs", dim = true }, "workspace"],   # its PRs, then its space
+]
 ```
+
+and reload with `herdr server reload-config`. A space then reads
 
 ```
   ● ACT-1638 Discover catalog  #1049 draft ✗
     act-1638-discover-catalog
 ```
+
+and an agent
+
+```
+  ○ Offline sync conflicts
+    #482 ✓ approved #476 draft ● · notes-app
+```
+
+For an agent, `$prs` is the one token to use: its branch's PR and the others
+it opened, as one list (see [A PR's agents](#a-prs-agents)). Give it a line
+with little else on it: herdr shortens every token on a crowded line, and
+the status is the first thing to go.
+
+> **Attached to another machine?** With `herdr --remote`, the sidebar is
+> drawn from the config of the machine you're sitting at, so the rows go in
+> *its* `config.toml` (reload with the UI's *reload config* action), while
+> the tokens come from the plugin on the machine the agents run on, so
+> that's where the plugin has to be installed. Rows changed on the server
+> change nothing you can see.
 
 | token        | example                        |
 |--------------|--------------------------------|
@@ -290,6 +325,7 @@ rows = [["state_icon", "pane", "$pr"], ["workspace"]]
 | `$pr_state`  | `open`, `draft`, `merged`, `closed` |
 | `$pr_checks` | `✓`, `✗`, `●` (open PRs)       |
 | `$pr_review` | `approved`, `changes requested`, `needs review` (open PRs) |
+| `$prs`       | `#482 ✓ approved #1103 ● #1101 ✓`: every PR that's this agent's, in one list: its branch's, then the others it opened (see [below](#a-prs-agents)) |
 
 Style them like any token, e.g. `{ token = "$pr_badge", dim = true }`.
 
@@ -310,6 +346,49 @@ tick.
 
 Turn them off with `"labels": false` (the next tick clears them).
 
+### A PR's agents
+
+A space's branch has one PR, but an agent can open several, from branches
+its space was never on, and more than one agent can work on a PR. Then
+it's anyone's guess which agent to go to about it. So the plugin keeps
+track of every agent that has to do with an open PR:
+
+| | |
+|---|---|
+| **opened it**     | the Claude Code session that created the PR |
+| **on its branch** | an agent, of any kind, in a space on the PR's branch |
+| **worked on it**  | another Claude Code session that looked at, pushed to or commented on it |
+
+- **In the popup**, a PR's row names its first agent and counts the rest
+  (`◆ Offline sync conflicts +1`), and the PR screen lists them, each with
+  its state. **ctrl+g** (**a** on the PR screen) goes to the agent's pane,
+  asking which when there are several; so does a click on an agent. Typing
+  an agent's name filters to its PRs.
+- **A session that isn't in a pane** (you closed it, or it never ran in
+  herdr) is listed too, dimmed, under the name Claude gave it. There's
+  nowhere to go, so the key copies the command that resumes it:
+  `cd … && claude --resume …`.
+- **`$prs`** on an agent in the sidebar is every PR that's its own, as one
+  list: its branch's PR first, as `$pr_badge` has it, then the open PRs it
+  opened from elsewhere, newest first, each with its checks (`#1112 draft ✓
+  #1103 ● #1101 ✓`). A PR that's both is there once; past three, the rest
+  are counted (`+2`). A space has its agents' together. It's the one token
+  an agent's row needs; `$pr` and `$pr_badge` are the branch's PR alone.
+
+There's nothing to set up. Claude Code notes in each session's transcript
+the PRs it works on and the ones it created (its own commands or a
+subagent's, typically `gh pr create`), and herdr knows which session each
+pane runs. Each tick reads what's new in the transcripts: the first time,
+those of the last 30 days. A PR stays with its pane through `/clear`, and
+follows its session into another pane when you resume it there. Once a PR
+is merged or closed it's forgotten.
+
+![A pull request's agents, to choose between](docs/images/agents.png)
+
+It can't know about a PR opened in the browser or on another machine, and
+of another kind of agent it knows only the branch it's on. Turn it off with
+`"agent_prs": false`.
+
 ## Configuration
 
 Everything is optional. Put `config.json` in the plugin's config directory
@@ -325,6 +404,7 @@ Everything is optional. Put `config.json` in the plugin's config directory
   "agent_wait_seconds": 90,
   "labels": true,
   "label_refresh_seconds": 60,
+  "agent_prs": true,
   "theme": "dark"
 }
 ```
@@ -338,6 +418,7 @@ Everything is optional. Put `config.json` in the plugin's config directory
 | `agent_wait_seconds`    | `90`             | How long **start** waits for that agent. |
 | `labels`                | `true`           | The sidebar tokens. |
 | `label_refresh_seconds` | `60`             | How old a branch's PR status may get before a herdr event asks GitHub again. |
+| `agent_prs`             | `true`           | Keeping track of each PR's agents, by reading Claude Code's transcripts (see [A PR's agents](#a-prs-agents)). |
 | `theme`                 | asks the terminal | `dark` or `light`, if the automatic choice is wrong. |
 
 A copy is in [`config.example.json`](config.example.json). Colours follow
@@ -362,9 +443,21 @@ PR's branch.
 **What's kept locally**, in `~/.local/state/herdr/plugins/herdr-github/`,
 readable only by you: `lists.json` (the last lists, shown while fresh ones
 load: numbers, titles, branches, states; and the repos you can reach, for
-the repo list), `labels.json` (each branch's PR status, for the labels),
+the repo list), `labels.json` (each branch's PR status, for the labels;
+and for each open PR your Claude sessions worked on, its number and status
+and those sessions: their IDs, titles, directories and panes),
 `prefs.json` (your last tab, your merge method per repo, repos you picked
 lately) and the background log.
+
+**What's read locally.** Claude Code's session transcripts
+(`~/.claude/projects`, or under `CLAUDE_CONFIG_DIR`) written to in the last
+30 days, to find the PRs each session worked on. Only Claude Code's own
+notes are looked at (a PR linked to the session, a command's result marked
+as having created one, the session's title), and only the PR's URL, the
+time, the title and the session's directory are kept. Nothing from them
+leaves your machine except the PR's number, when GitHub is asked for its
+status.
+`"agent_prs": false` stops it.
 
 **Text from GitHub.** Titles, bodies, comments, names and labels are written
 by other people, so every string has terminal escape sequences and control
@@ -395,10 +488,18 @@ enter in the popup to run `gh auth login` there, or run
 shows what the plugin sees.
 
 **No labels in the sidebar.** Add the tokens to your rows (see
-[Sidebar labels](#sidebar-labels)) and reload the config. Then
+[Sidebar labels](#sidebar-labels)) and reload the config: on the machine
+you're sitting at, if you're attached to another with `herdr --remote`. Then
 `herdr plugin action invoke herdr-github.labels` refreshes them and toasts
 what went wrong, if anything. A space on `main`, or on a branch with no PR,
 has none.
+
+**An agent's PR isn't in `$prs`, or a PR has no agent.** `$prs` shows PRs
+that are open and that the agent opened itself. A session is matched to
+its pane by the session ID herdr knows (`herdr agent list` shows an
+`agent_session`; `herdr integration install claude` if not); without one
+it's listed as having no pane. Either appears at the next tick: when the
+agent stops, or you switch pane.
 
 **"no checkout of owner/repo found".** Open the popup from inside the repo,
 let it clone, or map it under `"repos"`. A remote using an SSH host alias
@@ -427,7 +528,8 @@ with the invoking space's directory; the popup is the same binary running a
 - **herdr**: its local socket: `worktree.list/create/open/remove`,
   `workspace.list` and `pane.list` to find checkouts and spaces,
   `workspace.report_metadata` and `pane.report_metadata` for labels,
-  `plugin.pane.open` for the popup, `agent.prompt` for start.
+  `plugin.pane.open` for the popup, `agent.prompt` for start, `agent.focus`
+  to go to an agent.
 - **Start** and the post-change label refresh run detached, so the popup can
   close.
 
@@ -439,11 +541,13 @@ with the invoking space's directory; the popup is the same binary running a
 | `repos.go`     | remotes, finding a repo's checkout, cloning            |
 | `worktree.go`  | PR worktrees (forks too), start, removal               |
 | `labels.go`    | the sidebar tokens (`tick`)                            |
+| `agents.go`    | each PR's agents, from Claude Code's transcripts and herdr's panes |
 | `tui.go`       | lists, tabs, filter, menus                             |
 | `detail.go`    | the PR screen, draft, merge and clean-up               |
 | `repopicker.go` | the repo tab's repo picker                            |
 | `cache.go`, `prefs.go` | the lists from last time, remembered choices   |
 | `markdown.go`, `sanitize.go`, `theme.go`, `mouse.go` | rendering, safety, colours, mouse |
+| `clipboard.go`, `platform_*.go` | the clipboard and the browser, on macOS and Linux |
 | `demo.go`      | the fictional demo org                                 |
 
 ## Development
@@ -452,7 +556,7 @@ with the invoking space's directory; the popup is the same binary running a
 sh scripts/build.sh                 # build bin/herdr-github
 go test ./...                       # the suite
 bin/herdr-github picker --demo      # the picker in any terminal
-sh scripts/screenshots.sh           # docs/images from the demo (needs freeze)
+sh scripts/screenshots.sh           # docs/images from the demo (needs freeze; sips or ImageMagick to size them)
 ```
 
 The tests cover the GraphQL client against a fake GitHub (paging, errors,
