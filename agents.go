@@ -458,6 +458,59 @@ func prsToken(branch *prStatus, branchKey string, opened []trackedPR) string {
 	return strings.Join(parts, " ")
 }
 
+// panePRs are the PRs of the agent in a pane, by openedKey, the likeliest
+// first: its branch's (its space's, for a pane that isn't an agent's), then
+// the open ones it opened, newest first, then the ones it worked on, the
+// latest first.
+func panePRs(st labelState, paneID, workspaceID string) []string {
+	var keys []string
+	seen := map[string]bool{}
+	add := func(key string) {
+		if !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+	branch := st.Reported[paneID].Branch
+	if branch == "" {
+		branch = st.Reported[workspaceID].Branch
+	}
+	if e := st.Branches[branch]; branch != "" && e.PR != nil {
+		repo, _, _ := strings.Cut(branch, "\x00")
+		add(repo + "#" + strconv.Itoa(e.PR.Number))
+	}
+	if paneID == "" {
+		return keys
+	}
+	opened := st.openByPane()[paneID]
+	sort.Slice(opened, func(i, j int) bool { return opened[i].Number > opened[j].Number })
+	for _, pr := range opened {
+		add(pr.key())
+	}
+	type worked struct {
+		key  string
+		last time.Time
+	}
+	var rest []worked
+	for key, pr := range st.PRs {
+		for s, part := range pr.By {
+			if st.Sessions[s].Pane == paneID && pr.open() {
+				rest = append(rest, worked{key, part.Last})
+			}
+		}
+	}
+	sort.Slice(rest, func(i, j int) bool {
+		if !rest[i].last.Equal(rest[j].last) {
+			return rest[i].last.After(rest[j].last)
+		}
+		return rest[i].key < rest[j].key
+	})
+	for _, w := range rest {
+		add(w.key)
+	}
+	return keys
+}
+
 // What an agent had to do with a PR, the most telling first.
 const (
 	partOpened = "opened it"
@@ -578,7 +631,9 @@ func orderAgents(list []prAgent) []prAgent {
 // ── in the popup ──────────────────────────────────────────────────────────────
 
 const (
-	agentGlyph = "◆"
+	// agentGlyph marks an agent. Not one of the PR states' (● ◌ ◆ ⊘), and one
+	// that common monospace fonts include.
+	agentGlyph = "▸"
 	// agentsShown is how many of a PR's agents its screen lists; with more,
 	// the last line counts the rest, which are in the menu.
 	agentsShown = 4
@@ -756,4 +811,144 @@ func (m model) goTo(a prAgent) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// ── straight to an agent's PR ─────────────────────────────────────────────────
+
+// prRef names a PR the picker is to open on.
+type prRef struct {
+	repo   repoRef
+	number int
+}
+
+func (r prRef) key() string { return openedKey(r.repo, r.number) }
+
+// prRefsOf turns openedKeys (as panePRs gives them) into refs.
+func prRefsOf(keys []string) []prRef {
+	var out []prRef
+	for _, k := range keys {
+		repo, num, ok := strings.Cut(k, "#")
+		r, valid := parseRepoKey(repo)
+		n, err := strconv.Atoi(num)
+		if ok && valid && err == nil && n > 0 {
+			out = append(out, prRef{r, n})
+		}
+	}
+	return out
+}
+
+// paneRefsMsg is an agent's PRs, looked for again after a refresh.
+type paneRefsMsg []prRef
+
+// refreshLabelsFn brings labels.json up to date; a seam for tests.
+var refreshLabelsFn = func(ctx context.Context, cfg config) { _ = tick(ctx, cfg, true) }
+
+// openForPane starts the picker on the PR of the agent in a pane ("pr"
+// action). If none is known, the labels are refreshed and it looks again: a
+// PR opened a moment ago isn't known until a tick has seen it.
+func (m model) openForPane(pane, space string) (model, tea.Cmd) {
+	if refs := prRefsOf(panePRs(readLabelState(), pane, space)); len(refs) > 0 {
+		return m.openOn(refs)
+	}
+	m.opening = "Looking for this agent's pull request…"
+	ctx, cfg := m.ctx, m.cfg
+	return m, tea.Batch(m.spin.Tick, func() tea.Msg {
+		refreshLabelsFn(ctx, cfg)
+		return paneRefsMsg(prRefsOf(panePRs(readLabelState(), pane, space)))
+	})
+}
+
+// noPRForAgent is where the "pr" action ends up when the agent has no PR:
+// on this repo's list, where one the plugin couldn't tie to it would be.
+func (m model) noPRForAgent() model {
+	m.opening = ""
+	m.err = "No pull request found for this agent"
+	if m.repo != nil {
+		m.err += ": these are " + m.repo.String() + "'s"
+		m.tab, m.cursor, m.offset, m.wantRepoRow = tabRepo, 0, 0, false
+		m.mode = modeLoading
+		if m.loaded[tabRepo] {
+			m.mode = modeList
+		}
+		m.clampCursor()
+	}
+	return m
+}
+
+// prsResolvedMsg is the PRs the picker was opened on, found.
+type prsResolvedMsg struct {
+	prs []pullRequest
+	err error // why one (or all) couldn't be
+}
+
+// openOn starts the picker on an agent's PRs, not on the lists: those in a
+// list from last time open at once; any other is asked for first, behind a
+// line saying so.
+func (m model) openOn(refs []prRef) (model, tea.Cmd) {
+	known := map[string]pullRequest{}
+	for _, list := range m.prs {
+		for _, pr := range list {
+			known[strings.ToLower(pr.key())] = pr
+		}
+	}
+	prs := make([]pullRequest, len(refs))
+	missing := false
+	for i, r := range refs {
+		pr, ok := known[r.key()]
+		prs[i], missing = pr, missing || !ok
+	}
+	if !missing {
+		return m.showPRs(prs)
+	}
+	m.opening = fmt.Sprintf("Opening #%d…", refs[0].number)
+	client, ctx := m.client, m.ctx
+	return m, tea.Batch(m.spin.Tick, func() tea.Msg {
+		var msg prsResolvedMsg
+		for i, r := range refs {
+			pr := prs[i]
+			if _, ok := known[r.key()]; !ok {
+				var err error
+				if pr, err = client.byNumber(ctx, r.repo, r.number); err != nil {
+					msg.err = err
+					continue
+				}
+			}
+			msg.prs = append(msg.prs, pr)
+		}
+		return msg
+	})
+}
+
+// showPRs opens the one PR, or asks which of several. You came for the PR,
+// so from its screen esc closes the popup; the lists are a ← away.
+func (m model) showPRs(prs []pullRequest) (model, tea.Cmd) {
+	switch len(prs) {
+	case 0:
+		return m, nil
+	case 1:
+		m.direct = true
+		next, cmd := m.openPR(prs[0])
+		return next.(model), cmd
+	}
+	mn := &menu{id: "prs", title: "This agent's pull requests"}
+	for _, pr := range prs {
+		state := "open"
+		switch {
+		case pr.State == "MERGED":
+			state = "merged"
+		case pr.State == "CLOSED":
+			state = "closed"
+		case pr.IsDraft:
+			state = "draft"
+		}
+		mn.items = append(mn.items, menuItem{
+			label:  fmt.Sprintf("#%d %s", pr.Number, pr.Title),
+			detail: pr.Repository.NameWithOwner + "  ·  " + state,
+			run: func(m model) (tea.Model, tea.Cmd) {
+				m.direct = true
+				return m.openPR(pr)
+			},
+		})
+	}
+	return m.openMenu(mn), nil
 }

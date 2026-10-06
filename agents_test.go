@@ -561,3 +561,196 @@ func TestPopupGoesToAPRsAgents(t *testing.T) {
 		t.Fatalf("err %q", none.err)
 	}
 }
+
+func TestPanePRs(t *testing.T) {
+	now := nowFn()
+	open := &prStatus{State: "OPEN"}
+	st := readLabelState()
+	st.Branches["github.com/o/r\x00o:feat"] = branchEntry{PR: &prStatus{Number: 12, State: "MERGED"}}
+	st.Reported["w1"] = reported{Branch: "github.com/o/r\x00o:feat"}
+	st.Reported["p1"] = reported{Branch: "github.com/o/r\x00o:feat"}
+	st.Sessions["session-aaaa"] = sessionSeen{Pane: "p1"}
+	st.Sessions["session-bbbb"] = sessionSeen{Pane: "p2"}
+	track := func(n int, status *prStatus, by map[string]prPart) {
+		st.PRs[fmt.Sprintf("github.com/o/r#%d", n)] = trackedPR{Host: "github.com", Owner: "o", Name: "r", Number: n, Status: status, By: by}
+	}
+	track(12, open, map[string]prPart{"session-aaaa": {Opened: now, Last: now}})                              // its branch's too
+	track(20, open, map[string]prPart{"session-aaaa": {Opened: now, Last: now}})                              // opened
+	track(21, open, map[string]prPart{"session-aaaa": {Opened: now, Last: now}})                              // opened, newer
+	track(30, open, map[string]prPart{"session-aaaa": {Last: now}, "session-bbbb": {Opened: now, Last: now}}) // only worked on
+	track(31, nil, map[string]prPart{"session-aaaa": {Opened: now, Last: now}})                               // GitHub hasn't vouched for it
+	if got := fmt.Sprint(panePRs(st, "p1", "w1")); got != "[github.com/o/r#12 github.com/o/r#21 github.com/o/r#20 github.com/o/r#30]" {
+		t.Fatalf("the agent's: %s", got)
+	}
+	// A pane that isn't an agent's has its space's branch to go by.
+	if got := fmt.Sprint(panePRs(st, "p9", "w1")); got != "[github.com/o/r#12]" {
+		t.Fatalf("a shell's: %s", got)
+	}
+	if got := panePRs(st, "p9", "w9"); len(got) != 0 {
+		t.Fatalf("nothing to go by: %v", got)
+	}
+	refs := prRefsOf([]string{"github.com/o/r#12", "github.com/o/r#x", "evil#1", "github.com/o/r#0", "github.com/a/b#7"})
+	if len(refs) != 2 || refs[0].key() != "github.com/o/r#12" || refs[1].number != 7 {
+		t.Fatalf("refs: %+v", refs)
+	}
+}
+
+func TestPickerOpensStraightOnAnAgentsPR(t *testing.T) {
+	ref := func(repo string, n int) prRef { return prRef{repoRef{"github.com", "halcyon", repo}, n} }
+	// In a list from last time: its screen at once, and its keys work
+	// though the lists behind it are still loading. You came for the PR, so
+	// esc closes the popup; the lists are a ← away.
+	m := demoModel(t, tabMine)
+	m.mode = modeLoading
+	next, cmd := m.openOn([]prRef{ref("notes-app", 479)})
+	if next.screen != screenPR || next.cur.Number != 479 || next.opening != "" || cmd == nil {
+		t.Fatalf("not on #479's screen: screen %v opening %q", next.screen, next.opening)
+	}
+	next = drive(next, cmd)
+	if !strings.Contains(next.View(), "esc close") || !strings.Contains(next.View(), "← lists") {
+		t.Fatalf("the footer doesn't say how to leave:\n%s", next.View())
+	}
+	if _, cmd := next.Update(keyMsg("esc")); !quits(cmd) {
+		t.Fatal("esc on the PR you came for didn't close the popup")
+	}
+	lists := press(next, "left")
+	if lists.screen != screenList {
+		t.Fatal("← didn't go to the lists")
+	}
+	// From the lists it's the picker as ever: esc on a PR goes back to them.
+	if back := press(lists, "enter", "esc"); back.screen != screenList {
+		t.Fatal("esc on a PR opened from the list left the popup")
+	}
+
+	// In no list: asked for first, with no list shown meanwhile.
+	m = demoModel(t, tabMine)
+	listed := m.View()
+	m.prs = map[tab][]pullRequest{}
+	next, cmd = m.openOn([]prRef{ref("notes-app", 482)})
+	if view := next.View(); !strings.Contains(view, "Opening #482") || strings.Contains(view, "halcyon/sync-server") || !strings.Contains(listed, "halcyon/sync-server") {
+		t.Fatalf("the lists show on the way to the PR:\n%s", view)
+	}
+	if _, cmd := next.Update(keyMsg("esc")); !quits(cmd) {
+		t.Fatal("esc while it's opening didn't close the popup")
+	}
+	if held := press(next, "down", "enter"); held.screen != screenList || held.opening == "" {
+		t.Fatal("keys reached the lists behind")
+	}
+	if next = drive(next, cmd); next.screen != screenPR || next.cur.Number != 482 || next.curDetail == nil || next.opening != "" || !next.direct {
+		t.Fatalf("didn't arrive on #482: screen %v opening %q err %q", next.screen, next.opening, next.err)
+	}
+
+	// Several: which one? And one that's gone is said, not shown.
+	m = demoModel(t, tabMine)
+	next, cmd = m.openOn([]prRef{ref("notes-app", 482), ref("sync-server", 118), ref("notes-app", 9999)})
+	next = drive(next, cmd)
+	if next.menu == nil || len(next.menu.items) != 2 || !strings.Contains(next.err, "9999") {
+		t.Fatalf("no menu of the agent's PRs: %+v, err %q", next.menu, next.err)
+	}
+	if !strings.Contains(next.View(), "#118 Return merge proposals") {
+		t.Fatalf("the menu doesn't name them:\n%s", next.View())
+	}
+	chosen := press(next, "2")
+	if chosen.screen != screenPR || chosen.cur.Number != 118 {
+		t.Fatalf("choosing didn't open #118: %v", chosen.screen)
+	}
+	if _, cmd := chosen.Update(keyMsg("esc")); !quits(cmd) {
+		t.Fatal("esc on the chosen PR didn't close the popup")
+	}
+}
+
+// The "pr" action only says where it was pressed: the picker finds the PR,
+// so that with none it can answer where you're looking, not in a toast.
+func TestPRActionHandsThePaneToThePicker(t *testing.T) {
+	var opened map[string]string
+	toasts := 0
+	old := herdrCallFn
+	t.Cleanup(func() { herdrCallFn = old })
+	herdrCallFn = func(method string, params any, _ any) error {
+		p, _ := params.(map[string]any)
+		switch method {
+		case "plugin.pane.open":
+			opened, _ = p["env"].(map[string]string)
+		case "notification.show":
+			toasts++
+		}
+		return nil
+	}
+	t.Setenv("HERDR_PLUGIN_CONTEXT_JSON", `{"workspace_id":"w1","workspace_cwd":"/work","focused_pane_id":"p1"}`)
+	if err := runAction(context.Background(), withDefaults(config{}), "pr"); err != nil || toasts != 0 {
+		t.Fatalf("err %v, toasts %d", err, toasts)
+	}
+	if opened["HERDR_GITHUB_PANE"] != "p1" || opened["HERDR_GITHUB_SPACE"] != "w1" || opened["HERDR_GITHUB_CWD"] != "/work" {
+		t.Fatalf("picker opened with %v", opened)
+	}
+}
+
+func TestPickerFindsThePanesPR(t *testing.T) {
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir())
+	os.MkdirAll(stateDir(), 0o700)
+	onBranch := func(n int) {
+		t.Helper()
+		st := readLabelState()
+		st.Branches["github.com/halcyon/notes-app\x00halcyon:feat"] = branchEntry{PR: &prStatus{Number: n, State: "OPEN"}}
+		st.Reported["p1"] = reported{Branch: "github.com/halcyon/notes-app\x00halcyon:feat"}
+		if err := writeLabelState(st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refreshed := 0
+	old := refreshLabelsFn
+	t.Cleanup(func() { refreshLabelsFn = old })
+	refreshLabelsFn = func(context.Context, config) { refreshed++ }
+
+	// No PR known, and none after looking again: this repo's list, and why.
+	m := demoModel(t, tabMine)
+	next, cmd := m.openForPane("p1", "w1")
+	if view := next.View(); !strings.Contains(view, "Looking for this agent's pull request") || strings.Contains(view, "halcyon/sync-server") {
+		t.Fatalf("not looking, or showing the lists meanwhile:\n%s", view)
+	}
+	next = drive(next, cmd)
+	if refreshed != 1 || next.opening != "" || next.screen != screenList || next.tab != tabRepo || !strings.Contains(next.View(), "No pull request found for this agent: these are halcyon/notes-app's") {
+		t.Fatalf("refreshed %d, tab %v, screen %v:\n%s", refreshed, next.tab, next.screen, next.View())
+	}
+	if list := press(next, "down"); list.selected() == nil {
+		t.Fatal("the list it fell back to isn't usable")
+	}
+
+	// Opened a moment ago: the refresh finds it.
+	refreshLabelsFn = func(context.Context, config) { refreshed++; onBranch(479) }
+	next, cmd = demoModel(t, tabMine).openForPane("p1", "w1")
+	if next = drive(next, cmd); refreshed != 2 || next.screen != screenPR || next.cur.Number != 479 || !next.direct {
+		t.Fatalf("the refresh's PR wasn't opened: refreshed %d, screen %v, err %q", refreshed, next.screen, next.err)
+	}
+
+	// Known already: straight there, without asking anything again.
+	next, _ = demoModel(t, tabMine).openForPane("p1", "w1")
+	if refreshed != 2 || next.screen != screenPR || next.cur.Number != 479 {
+		t.Fatalf("a known PR waited on a refresh: refreshed %d, screen %v", refreshed, next.screen)
+	}
+}
+
+func TestPRByNumber(t *testing.T) {
+	found := true
+	fakeGitHub(t, func(w http.ResponseWriter, r *http.Request) {
+		req := decodeReq(t, r)
+		if req.Variables["n"] != float64(7) || req.Variables["owner"] != "o" || !strings.Contains(req.Query, "pullRequest(number: $n)") {
+			t.Errorf("query: %s %v", req.Query, req.Variables)
+		}
+		if !found {
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": nil}},
+				"errors": []map[string]any{{"type": "NOT_FOUND", "message": "Could not resolve to a PullRequest"}}})
+			return
+		}
+		reply(w, map[string]any{"repository": map[string]any{"pullRequest": prNode(7)}})
+	})
+	c := newClient("github.com")
+	pr, err := c.prByNumber(context.Background(), repoRef{"github.com", "o", "r"}, 7)
+	if err != nil || pr.Number != 7 || pr.Host != "github.com" || pr.ID == "" {
+		t.Fatalf("got %+v, %v", pr, err)
+	}
+	found = false
+	if _, err := c.prByNumber(context.Background(), repoRef{"github.com", "o", "r"}, 7); err == nil {
+		t.Fatal("a PR that isn't there came back")
+	}
+}

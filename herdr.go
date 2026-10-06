@@ -166,6 +166,7 @@ func listPanes(workspaceID string) ([]paneInfo, error) {
 type invocation struct {
 	WorkspaceID    string `json:"workspace_id"`
 	WorkspaceCwd   string `json:"workspace_cwd"`
+	FocusedPaneID  string `json:"focused_pane_id"`
 	FocusedPaneCwd string `json:"focused_pane_cwd"`
 }
 

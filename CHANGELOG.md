@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0 — 2026-10-06
+
+- **Straight to an agent's PR.** A new action, **GitHub: this agent's pull
+  request** (`herdr-github.pr`; bind it to `prefix+alt+p`, say), opens the
+  popup on the PR screen of the agent you're in: its branch's PR, or one it
+  opened. With several it asks which. With none it refreshes and looks
+  again, then lands on this repo's list, saying so.
+- Opened that way, the popup never shows the lists on the way to the PR,
+  the PR's keys work while they load behind it, and **esc** closes the
+  popup (**←** goes to the lists).
+- The agent marker is `▸`: `◆` is a merged PR's.
+- A long title no longer wraps a menu's line.
+
 ## 0.3.0 — 2026-10-06
 
 - **Whose PR is this?** Every open PR knows its agents: the Claude Code
