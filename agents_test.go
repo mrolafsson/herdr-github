@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 )
 
@@ -469,8 +470,8 @@ func TestPopupGoesToAPRsAgents(t *testing.T) {
 	if r := f.selected(); r == nil || r.pr.Number != 482 || len(f.rows()) != 2 {
 		t.Fatalf("filtering by agent: %+v", f.rows())
 	}
-	list, screen := m.View(), press(m, "enter").View()
-	if !strings.Contains(list, "Offline sync conflicts +1") || !strings.Contains(list, "^g agents") {
+	list, screen := ansi.Strip(m.View()), ansi.Strip(press(m, "enter").View())
+	if !strings.Contains(list, "Offline sync conflicts +1") || !strings.Contains(list, "^a agents") {
 		t.Fatalf("the list doesn't name the agents:\n%s", list)
 	}
 	for _, want := range []string{"Agents", "Offline sync conflicts", "opened it", "Review the three-way merge", "working", "on its branch", "a agents"} {
@@ -501,7 +502,7 @@ func TestPopupGoesToAPRsAgents(t *testing.T) {
 	}
 
 	// With more than one, the key asks which; the choice goes there.
-	menu := press(m, "ctrl+g")
+	menu := press(m, "ctrl+a")
 	if menu.menu == nil || len(menu.menu.items) != 2 || len(calls) != 0 {
 		t.Fatalf("no menu of agents: %+v", menu.menu)
 	}
@@ -552,7 +553,7 @@ func TestPopupGoesToAPRsAgents(t *testing.T) {
 	t.Setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")
 	gone := press(m, "down", "down") // #476
 	var after model
-	out := stdout(t, func() { after = press(gone, "ctrl+g") })
+	out := stdout(t, func() { after = press(gone, "ctrl+a") })
 	if !strings.Contains(out, "\x1b]52;c;") || !strings.Contains(after.flash, "resumes CRDT spike") {
 		t.Fatalf("out %q, flash %q, err %q", out, after.flash, after.err)
 	}
@@ -607,7 +608,7 @@ func TestPickerOpensStraightOnAnAgentsPR(t *testing.T) {
 		t.Fatalf("not on #479's screen: screen %v opening %q", next.screen, next.opening)
 	}
 	next = drive(next, cmd)
-	if !strings.Contains(next.View(), "esc close") || !strings.Contains(next.View(), "← lists") {
+	if view := ansi.Strip(next.View()); !strings.Contains(view, "esc close") || !strings.Contains(view, "← lists") {
 		t.Fatalf("the footer doesn't say how to leave:\n%s", next.View())
 	}
 	if _, cmd := next.Update(keyMsg("esc")); !quits(cmd) {
@@ -647,7 +648,7 @@ func TestPickerOpensStraightOnAnAgentsPR(t *testing.T) {
 	if next.menu == nil || len(next.menu.items) != 2 || !strings.Contains(next.err, "9999") {
 		t.Fatalf("no menu of the agent's PRs: %+v, err %q", next.menu, next.err)
 	}
-	if !strings.Contains(next.View(), "#118 Return merge proposals") {
+	if !strings.Contains(ansi.Strip(next.View()), "#118 Return merge proposals") {
 		t.Fatalf("the menu doesn't name them:\n%s", next.View())
 	}
 	chosen := press(next, "2")

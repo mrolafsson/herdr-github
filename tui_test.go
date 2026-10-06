@@ -366,7 +366,7 @@ func TestFooterHintsAreButtons(t *testing.T) {
 		if h.key == "d" {
 			break
 		}
-		x += len([]rune(h.label)) + len([]rune(hintSep))
+		x += len([]rune(h.label)) + 2 + hintGap // a pill: its label, a cell either side
 	}
 	next, cmd := m.Update(tea.MouseMsg{X: x + 1, Y: m.height - 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = drive(next.(model), cmd)

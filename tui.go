@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,61 +70,32 @@ type needCloneMsg struct {
 
 type loginDoneMsg struct{ err error }
 
-// ── styles ────────────────────────────────────────────────────────────────────
-
-// The defaults, for a theme that leaves a colour unset; useTheme recolours
-// the styles from herdr's theme.
-var (
-	defaultStyleDim      = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "243"})
-	defaultStyleHeader   = lipgloss.NewStyle().Bold(true)
-	defaultStyleTabOn    = lipgloss.NewStyle().Bold(true).Underline(true)
-	defaultStyleSelected = lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Light: "254", Dark: "237"})
-	defaultStyleErr      = lipgloss.NewStyle().Foreground(lipgloss.Color("#f85149"))
-	defaultStyleUrgent   = lipgloss.NewStyle().Foreground(lipgloss.Color("#db6d28")).Bold(true)
-	defaultStyleTree     = lipgloss.NewStyle().Foreground(lipgloss.Color("#4493f8"))
-	defaultStyleOK       = lipgloss.NewStyle().Foreground(lipgloss.Color("#3fb950"))
-	defaultStyleWarn     = lipgloss.NewStyle().Foreground(lipgloss.Color("#d29922"))
-	defaultStyleMerged   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ab7df8"))
-)
-
-var (
-	styleDim      = defaultStyleDim
-	styleHeader   = defaultStyleHeader
-	styleTabOn    = defaultStyleTabOn
-	styleSelected = defaultStyleSelected
-	styleErr      = defaultStyleErr
-	styleUrgent   = defaultStyleUrgent
-	styleTree     = defaultStyleTree
-	styleOK       = defaultStyleOK
-	styleWarn     = defaultStyleWarn
-	styleMerged   = defaultStyleMerged
-)
-
-// prIcon is the PR's state, in GitHub's colours for it: open green, draft
-// grey, merged purple, closed red. Every glyph is one common monospace fonts
-// include, so the columns stay straight.
+// prIcon is the PR's state as a mark, in the state's colour (prStyle). Every
+// glyph is one common monospace fonts include, so the columns stay straight.
 func prIcon(pr pullRequest) string {
+	glyph := "●"
 	switch {
 	case pr.State == "MERGED":
-		return styleMerged.Render("◆")
+		glyph = "◆"
 	case pr.State == "CLOSED":
-		return styleErr.Render("⊘")
+		glyph = "⊘"
 	case pr.IsDraft:
-		return styleDim.Render("◌")
+		glyph = "◌"
 	}
-	return styleOK.Render("●")
+	return prStyle(pr.State, pr.IsDraft).Render(glyph)
 }
 
-func prStateName(pr pullRequest) string {
+// prStateWord is the PR's state in a word.
+func prStateWord(pr pullRequest) string {
 	switch {
 	case pr.State == "MERGED":
-		return styleMerged.Render("Merged")
+		return "Merged"
 	case pr.State == "CLOSED":
-		return styleErr.Render("Closed")
+		return "Closed"
 	case pr.IsDraft:
-		return styleDim.Render("Draft")
+		return "Draft"
 	}
-	return styleOK.Render("Open")
+	return "Open"
 }
 
 // checksBadge is the head commit's checks as one coloured glyph.
@@ -643,7 +615,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+t":
 		return m.openRepoPicker()
-	case "ctrl+g":
+	case "ctrl+a", "ctrl+g": // a for agent, as on the PR screen; ctrl+g was its key before
 		if r := m.selected(); r != nil {
 			return m.goToAgent(*r.pr)
 		}
@@ -1113,8 +1085,9 @@ func (m model) viewRow(r row, selected bool) string {
 // rowParts are the two ends of a PR's row: what's left of its title, and the
 // meta right of it, which starts with its agent, agentW cells wide.
 func (m model) rowParts(pr *pullRequest, hot bool) (left, right string, agentW int) {
-	num := fmt.Sprintf("#%-*d", m.numWidth(), pr.Number)
-	left = " " + prIcon(*pr) + " " + styleDim.Render(num) + " "
+	// The number wears the PR's colour (prNumber), like its mark: they read as
+	// one. Padded after, so the titles line up.
+	left = " " + prIcon(*pr) + " " + prNumber(pr.Number, pr.State, pr.IsDraft) + strings.Repeat(" ", m.numWidth()-len(strconv.Itoa(pr.Number))) + " "
 
 	var meta []string
 	if a := m.rowAgent(*pr, hot); a != "" {
@@ -1188,7 +1161,7 @@ func (m model) fitRow(left, title, right string, w int, selected bool) string {
 	}
 	title = shorten(title, max(1, room))
 	pad := max(1, w-lw-lipgloss.Width(title)-rw-1)
-	line := left + title + strings.Repeat(" ", pad) + right
+	line := left + styleLead.Render(title) + strings.Repeat(" ", pad) + right
 	if selected {
 		return highlight(line, w)
 	}
@@ -1210,20 +1183,22 @@ func highlight(line string, w int) string {
 func (m model) currentFooter() []hint {
 	switch {
 	case m.opening != "":
-		return []hint{{"esc close", "esc"}}
+		return []hint{{"esc close", "esc", hintQuiet}}
 	case m.menu != nil:
-		return []hint{{"↑↓ choose", ""}, {"enter select", "enter"}, {"esc cancel", "esc"}}
+		return []hint{{"↑↓ choose", "", hintView}, {"enter select", "enter", hintGo}, {"esc cancel", "esc", hintQuiet}}
 	case m.screen != screenList:
 		return m.detailFooter()
 	}
-	hs := []hint{{"enter details", "enter"}, {"^w worktree", "ctrl+w"}, {"^s start", "ctrl+s"}, {"^o open", "ctrl+o"}}
+	// By kind, so the colours sit together: go, act, view, leave.
+	hs := []hint{{"enter details", "enter", hintGo}}
 	if r := m.selected(); r != nil && len(m.agentsOf(*r.pr)) > 0 {
-		hs = append(hs, hint{"^g " + plural(len(m.agentsOf(*r.pr)), "agent", "agents"), "ctrl+g"})
+		hs = append(hs, hint{"^a " + plural(len(m.agentsOf(*r.pr)), "agent", "agents"), "ctrl+a", hintGo})
 	}
+	hs = append(hs, hint{"^w worktree", "ctrl+w", hintAct}, hint{"^s start", "ctrl+s", hintAct}, hint{"^o open", "ctrl+o", hintView})
 	if m.tab == tabRepo {
-		hs = append(hs, hint{"^t repo", "ctrl+t"})
+		hs = append(hs, hint{"^t repo", "ctrl+t", hintView})
 	}
-	return append(hs, hint{"^r refresh", "ctrl+r"}, hint{"tab switch", "tab"}, hint{"esc close", "esc"})
+	return append(hs, hint{"^r refresh", "ctrl+r", hintView}, hint{"tab switch", "tab", hintView}, hint{"esc close", "esc", hintQuiet})
 }
 
 // ── menus ─────────────────────────────────────────────────────────────────────
@@ -1491,6 +1466,7 @@ func runPicker(ctx context.Context, cfg config, demo bool) error {
 			cfg.Theme = "dark"
 		}
 	}
+	darkTerminal = cfg.Theme == "dark"
 	useTheme(pickerTheme(cfg.Theme == "dark"))
 
 	var client source

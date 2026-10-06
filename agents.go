@@ -630,14 +630,9 @@ func orderAgents(list []prAgent) []prAgent {
 
 // ── in the popup ──────────────────────────────────────────────────────────────
 
-const (
-	// agentGlyph marks an agent. Not one of the PR states' (● ◌ ◆ ⊘), and one
-	// that common monospace fonts include.
-	agentGlyph = "▸"
-	// agentsShown is how many of a PR's agents its screen lists; with more,
-	// the last line counts the rest, which are in the menu.
-	agentsShown = 4
-)
+// agentsShown is how many of a PR's agents its screen lists; with more, the
+// last line counts the rest, which are in the menu.
+const agentsShown = 4
 
 func (m model) loadAgents() tea.Cmd {
 	if d, ok := m.client.(*demoSource); ok {
@@ -659,11 +654,13 @@ func agentNames(as []prAgent) string {
 	return strings.Join(names, " ")
 }
 
-func (a prAgent) glyph() string {
+// mark is the agent's state, as herdr's sidebar marks it; one with no pane
+// (nowhere to go: it can only be resumed) has the empty mark.
+func (a prAgent) mark() string {
 	if a.Pane == "" {
-		return styleDim.Render(agentGlyph) // nowhere to go: it can only be resumed
+		return agentMark("", "")
 	}
-	return styleTree.Render(agentGlyph)
+	return agentMark(a.Status, "")
 }
 
 // where is the agent's state, or that it has no pane.
@@ -691,7 +688,7 @@ func (m model) rowAgent(pr pullRequest, hot bool) string {
 	if hot {
 		style = styleHintHot
 	}
-	return as[0].glyph() + " " + style.Render(name)
+	return as[0].mark() + " " + style.Render(name)
 }
 
 // agentLines is the PR screen's "Agents" field: a line each, which a click
@@ -722,7 +719,7 @@ func (m model) agentLines(pr pullRequest, top int) string {
 				line += styleDim.Render("  ·  " + s)
 			}
 		}
-		b.WriteString(m.field(name, a.glyph()+" "+line))
+		b.WriteString(m.field(name, a.mark()+" "+line))
 	}
 	return b.String()
 }
@@ -772,7 +769,7 @@ func agentsMenu(pr pullRequest, as []prAgent) *menu {
 		if a.Pane == "" {
 			detail += "  ·  copies the command that resumes it"
 		}
-		mn.items = append(mn.items, menuItem{label: a.glyph() + " " + a.Name, detail: detail, search: a.Name,
+		mn.items = append(mn.items, menuItem{label: a.mark() + " " + a.Name, detail: detail, search: a.Name,
 			run: func(m model) (tea.Model, tea.Cmd) { return m.goTo(a) }})
 	}
 	return mn
@@ -942,7 +939,8 @@ func (m model) showPRs(prs []pullRequest) (model, tea.Cmd) {
 			state = "draft"
 		}
 		mn.items = append(mn.items, menuItem{
-			label:  fmt.Sprintf("#%d %s", pr.Number, pr.Title),
+			label:  prNumber(pr.Number, pr.State, pr.IsDraft) + " " + pr.Title,
+			search: fmt.Sprintf("#%d %s", pr.Number, pr.Title),
 			detail: pr.Repository.NameWithOwner + "  ·  " + state,
 			run: func(m model) (tea.Model, tea.Cmd) {
 				m.direct = true

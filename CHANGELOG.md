@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **One look, shared with herdr-linear and herdr-recap.** A title, a branch,
+  a pull request, an agent and a key are drawn the same in all three (see
+  *Colours* in the README). Here: a PR's number and mark wear its state's
+  colour (draft peach, open green, merged mauve, closed red), its screen
+  shows the state as a pill, branches are mauve, and an agent shows its
+  state's mark (`◉ ◔ ● ✓`) in place of `▸`.
+- **Keys are pills.** The keys along the bottom are solid chips, coloured by
+  what they do and grouped by colour; the one under the pointer underlines.
+  Too many for the popup's width, and labels shorten, then the least missed
+  keys are left out.
+- **The `terminal` theme keeps its hierarchy.** Branches and dim text no
+  longer share the body's grey, and a title is the brightest text.
+- **ctrl+a** goes to a PR's agent from the list, matching **a** on the PR
+  screen. ctrl+g still works.
+- Fixed: a click on the agents key, or on `← lists`, typed the key's name
+  into the filter instead of pressing it.
+
 ## 0.4.0 — 2026-10-06
 
 - **Straight to an agent's PR.** A new action, **GitHub: this agent's pull

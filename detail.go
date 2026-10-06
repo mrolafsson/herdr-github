@@ -539,7 +539,8 @@ func (m model) prHeaderTop() string {
 	pr := m.cur
 	w := max(20, m.width-2)
 	var b strings.Builder
-	b.WriteString(" " + prIcon(*pr) + " " + prStateName(*pr) + styleDim.Render(fmt.Sprintf("  ·  #%d  ·  %s", pr.Number, pr.Repository.NameWithOwner)) + "\n\n")
+	ps := prStyle(pr.State, pr.IsDraft)
+	b.WriteString(" " + statePill(ps, prStateWord(*pr)) + "  " + prNumber(pr.Number, pr.State, pr.IsDraft) + styleDim.Render("  ·  "+pr.Repository.NameWithOwner) + "\n\n")
 	b.WriteString(lipgloss.NewStyle().Width(w).PaddingLeft(1).Bold(true).Render(pr.Title) + "\n\n")
 
 	author := pr.author()
@@ -555,7 +556,7 @@ func (m model) prHeaderTop() string {
 	if m.worktrees[pr.key()] {
 		tree = styleTree.Render("⌥ worktree")
 	}
-	b.WriteString(m.field("Branch", head+styleDim.Render(" → ")+pr.BaseRefName+"  "+tree))
+	b.WriteString(m.field("Branch", styleBranch.Render(head)+styleDim.Render(" → ")+styleBranch.Render(pr.BaseRefName)+"  "+tree))
 	return b.String()
 }
 
@@ -758,21 +759,23 @@ func mdEscape(s string) string {
 }
 
 func (m model) detailFooter() []hint {
-	hs := []hint{{"w worktree", "w"}, {"s start", "s"}}
+	// By kind, so the colours sit together: go, act, view, leave.
+	var hs []hint
 	if m.cur != nil && len(m.agentsOf(*m.cur)) > 0 {
-		hs = append(hs, hint{"a " + plural(len(m.agentsOf(*m.cur)), "agent", "agents"), "a"})
+		hs = append(hs, hint{"a " + plural(len(m.agentsOf(*m.cur)), "agent", "agents"), "a", hintGo})
 	}
+	hs = append(hs, hint{"w worktree", "w", hintAct}, hint{"s start", "s", hintAct})
 	if m.cur != nil && m.cur.State == "OPEN" {
 		if m.cur.IsDraft {
-			hs = append(hs, hint{"d ready", "d"})
+			hs = append(hs, hint{"d ready", "d", hintAct})
 		} else {
-			hs = append(hs, hint{"d draft", "d"})
+			hs = append(hs, hint{"d draft", "d", hintAct})
 		}
-		hs = append(hs, hint{"m merge", "m"})
+		hs = append(hs, hint{"m merge", "m", hintAct})
 	}
-	hs = append(hs, hint{"o open", "o"}, hint{"y copy url", "y"})
+	hs = append(hs, hint{"o open", "o", hintView}, hint{"y copy url", "y", hintView})
 	if m.direct {
-		return append(hs, hint{"← lists", "left"}, hint{"esc close", "esc"})
+		return append(hs, hint{"← lists", "left", hintView}, hint{"esc close", "esc", hintQuiet})
 	}
-	return append(hs, hint{"esc back", "esc"})
+	return append(hs, hint{"esc back", "esc", hintQuiet})
 }

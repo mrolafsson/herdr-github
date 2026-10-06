@@ -32,7 +32,9 @@ opened it and any that worked on it since, a key or a click away.
   closed. An agent's PRs, its branch's and the others it opened, are in the
   sidebar as `$prs`.
 - Uses **gh's sign-in**: no tokens of its own, GitHub Enterprise included.
-- Keyboard first, and the mouse works. In **herdr's theme colours**.
+- Keyboard first, and the mouse works: every key along the bottom is a pill
+  you can click. In **herdr's theme colours**, with [one look](#colours)
+  shared by the herdr plugins.
 
 **Contents:** [Requirements](#requirements) · [Install](#install) ·
 [Try it without an account](#try-it-without-an-account) · [Use](#use) ·
@@ -131,7 +133,8 @@ Rows show the state (`●` open, `◌` draft), the number and title, then
 `conflicts` / `changes` / `approved`, `auto` if auto-merge is on, the checks
 (`✓` passed, `✗` failed, `●` running) and `⌥` if the worktree exists. A PR
 your agents have worked on names the first of them, and counts the rest:
-`▸ Offline sync conflicts +1` (see [A PR's agents](#a-prs-agents)). The
+`✓ Offline sync conflicts +1`, the mark being the agent's state (see
+[A PR's agents](#a-prs-agents)). The
 popup reopens on the tab you left.
 
 **Another repo.** The third tab starts on the repo of the space you opened
@@ -169,7 +172,7 @@ as they arrive; long lists fill in page by page (`Mine 20+`).
 | ctrl+w             | open or create its worktree              |
 | ctrl+s             | start: worktree, and a prompt for its agent |
 | ctrl+o             | open on GitHub                           |
-| ctrl+g             | go to its agent (a menu, if several)     |
+| ctrl+a             | go to its agent (a menu, if several)     |
 | ctrl+t             | pick the repo tab's repo                 |
 | ctrl+r             | refresh                                  |
 | tab, ← →           | switch tabs                              |
@@ -208,7 +211,8 @@ and line, and the conversation, oldest first.
 
 Hover highlights a row, a click opens it, the wheel scrolls. A click on
 an agent, in a row or on the PR screen, goes to the agent instead. The tabs, the
-footer hints and menu items are all buttons. The popup captures the mouse, so
+keys along the bottom (pills: the one under the pointer underlines) and menu
+items are all buttons. The popup captures the mouse, so
 to select text hold **⌥** while dragging.
 
 ## Merging
@@ -377,8 +381,8 @@ track of every agent that has to do with an open PR:
 | **worked on it**  | another Claude Code session that looked at, pushed to or commented on it |
 
 - **In the popup**, a PR's row names its first agent and counts the rest
-  (`▸ Offline sync conflicts +1`), and the PR screen lists them, each with
-  its state. **ctrl+g** (**a** on the PR screen) goes to the agent's pane,
+  (`✓ Offline sync conflicts +1`), and the PR screen lists them, each with
+  its state. **ctrl+a** (**a** on the PR screen) goes to the agent's pane,
   asking which when there are several; so does a click on an agent. Typing
   an agent's name filters to its PRs.
 - **From an agent to its PR**, the other way round: **GitHub: this agent's
@@ -446,9 +450,36 @@ Everything is optional. Put `config.json` in the plugin's config directory
 | `agent_prs`             | `true`           | Keeping track of each PR's agents, by reading Claude Code's transcripts (see [A PR's agents](#a-prs-agents)). |
 | `theme`                 | asks the terminal | `dark` or `light`, if the automatic choice is wrong. |
 
-A copy is in [`config.example.json`](config.example.json). Colours follow
-herdr's own `[theme]`, as in
-[herdr-linear](https://github.com/mrolafsson/herdr-linear#colours).
+A copy is in [`config.example.json`](config.example.json).
+
+### Colours
+
+Colours follow herdr's own `[theme]` (how it's read is described in
+[herdr-linear](https://github.com/mrolafsson/herdr-linear#colours)).
+The herdr plugins (herdr-github, herdr-linear, herdr-recap) draw the same
+thing the same way, from one shared file (`look.go`):
+
+| what                 | how it's drawn |
+|----------------------|----------------|
+| a title              | the theme's brightest text; bold where it heads a card or a screen |
+| prose                | a step quieter |
+| where, when, who     | dim |
+| a branch             | mauve |
+| a pull request       | its state's colour: draft peach (work in progress), open green, merged mauve, closed red |
+| an agent             | its state's mark and colour, as in herdr's sidebar: `◉` needs you, `◔` working, `●` done, `✓` idle |
+| counts               | yellow; added green, removed red; tasks teal |
+| keys                 | pills along the bottom, coloured by what they do: green goes somewhere, peach changes something, blue changes what you see, grey leaves |
+| a screen's subject   | wears its state as a pill (`Open`, `Draft`, `In Review`) |
+
+**The `terminal` theme.** herdr's `terminal` theme draws with your terminal's
+16 colours, and gives several of these the same one (branches and dim text
+the body's grey). The plugins spread them over the terminal's other colours
+(branches on magenta, dim on bright black), so the list reads the same as on
+a named theme. A colour you set yourself in `[theme.custom]` wins.
+
+**A narrow popup.** When the keys don't fit, their labels shorten first (`^o
+open in Linear` becomes `^o open`), then the keys you'd miss least are left
+out. A key that isn't shown still works.
 
 ## Privacy and security
 
@@ -571,7 +602,8 @@ with the invoking space's directory; the popup is the same binary running a
 | `detail.go`    | the PR screen, draft, merge and clean-up               |
 | `repopicker.go` | the repo tab's repo picker                            |
 | `cache.go`, `prefs.go` | the lists from last time, remembered choices   |
-| `markdown.go`, `sanitize.go`, `theme.go`, `mouse.go` | rendering, safety, colours, mouse |
+| `look.go`      | the look shared with herdr-linear and herdr-recap: colours, pills, keys (kept identical in all three) |
+| `markdown.go`, `sanitize.go`, `theme.go`, `mouse.go` | rendering, safety, herdr's theme, mouse |
 | `clipboard.go`, `platform_*.go` | the clipboard and the browser, on macOS and Linux |
 | `demo.go`      | the fictional demo org                                 |
 
