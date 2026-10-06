@@ -1,6 +1,6 @@
 id = "herdr-github"
 name = "GitHub"
-version = "0.3.0"
+version = "0.4.0"
 min_herdr_version = "0.9.0"
 description = "Your pull requests in a herdr popup: merge readiness, checks, reviews and the conversation; toggle draft, merge (or auto-merge), and one key to a worktree for any PR, forks included. Every space and agent gets its branch's PR as a sidebar label, and every PR lists its agents, a key away. Uses gh's sign-in."
 platforms = ["macos", "linux"]
@@ -21,6 +21,18 @@ title = "GitHub: pull requests"
 description = "Your PRs, the ones waiting on your review, and this repo's: open one, merge it, or jump to its worktree."
 contexts = ["global", "workspace", "pane"]
 command = ["./bin/herdr-github", "action", "open"]
+
+# The pull request of the agent you're in, straight to its screen:
+#   [[keys.command]]
+#   key = "prefix+alt+p"
+#   type = "plugin_action"
+#   command = "herdr-github.pr"
+[[actions]]
+id = "pr"
+title = "GitHub: this agent's pull request"
+description = "Straight to the pull request of the agent you're in: its branch's, or one it opened. With several, it asks which; with none, it shows this repo's."
+contexts = ["global", "workspace", "pane"]
+command = ["./bin/herdr-github", "action", "pr"]
 
 [[actions]]
 id = "demo"

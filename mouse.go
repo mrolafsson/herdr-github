@@ -89,9 +89,18 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.mouseX, m.mouseY = ev.X, ev.Y
+	if m.opening != "" {
+		// Only the footer is there to click.
+		if ev.Action == tea.MouseActionPress && ev.Button == tea.MouseButtonLeft && ev.Y == m.height-1 {
+			if k := hintAt(m.currentFooter(), ev.X); k != "" {
+				return m.handleKey(keyMsg(k))
+			}
+		}
+		return m, nil
+	}
 	if ev.Action == tea.MouseActionMotion {
 		// Hover highlights, like a launcher: the click then opens what you see.
-		if m.mode == modeBusy || (m.mode == modeLoading && m.menu == nil) {
+		if m.mode == modeBusy || (m.mode == modeLoading && m.menu == nil && m.screen == screenList) {
 			return m, nil
 		}
 		if i, ok := m.menuAt(ev.Y); ok {
@@ -138,7 +147,7 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if m.mode == modeLoading && m.menu == nil {
+	if m.mode == modeLoading && m.menu == nil && m.screen == screenList {
 		return m, nil
 	}
 	if i, ok := m.menuAt(ev.Y); ok {
@@ -199,7 +208,7 @@ func (m model) clickTab(x int) (tea.Model, tea.Cmd) {
 		w := lipgloss.Width(l)
 		if x >= pos && x < pos+w {
 			onList := m.screen == screenList
-			m.screen, m.err, m.flash, m.curDetail = screenList, "", "", nil
+			m.screen, m.err, m.flash, m.curDetail, m.direct = screenList, "", "", nil, false
 			if tab(i) == m.tab {
 				// Clicking the repo tab you're on picks another repo.
 				if onList && tab(i) == tabRepo {

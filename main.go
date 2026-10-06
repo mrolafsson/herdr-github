@@ -18,6 +18,8 @@ const usage = `herdr-github — GitHub pull requests in herdr
   action open      what the herdr action runs: opens the picker popup
   action demo      what the herdr action runs: the picker on a fictional org
   action labels    what the herdr action runs: refresh the sidebar labels now
+  action pr        what the herdr action runs: the picker, on the pull request
+                   of the agent you're in
   picker [--demo]  the popup itself; --demo (or HERDR_GITHUB_DEMO=1) shows a
                    fictional org: no account, no network, safe to screenshot
   tick [--force]   refresh the sidebar labels ($pr, $pr_badge, …); herdr runs
@@ -98,6 +100,21 @@ func runAction(ctx context.Context, cfg config, name string) error {
 		}
 		if err := openPicker(map[string]string{"HERDR_GITHUB_CWD": cwd}); err != nil {
 			notify("GitHub", "Couldn't open the picker: "+err.Error())
+			return err
+		}
+		return nil
+	case "pr":
+		// Straight to the PR of the agent you're in. The picker works out
+		// which, so that it can look again, and say so there, if there's none:
+		// a toast can be anywhere but in front of you.
+		inv := invocationContext()
+		cwd := inv.WorkspaceCwd
+		if cwd == "" {
+			cwd = inv.FocusedPaneCwd
+		}
+		env := map[string]string{"HERDR_GITHUB_CWD": cwd, "HERDR_GITHUB_PANE": inv.FocusedPaneID, "HERDR_GITHUB_SPACE": inv.WorkspaceID}
+		if err := openPicker(env); err != nil {
+			notify("GitHub", "Couldn't open the pull request: "+err.Error())
 			return err
 		}
 		return nil

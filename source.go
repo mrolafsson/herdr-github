@@ -30,6 +30,8 @@ type source interface {
 	// page's next until it's "".
 	list(ctx context.Context, t tab, cursor string) (page, error)
 	detail(ctx context.Context, pr pullRequest) (*prDetail, error)
+	// byNumber is a PR that isn't in a list: enough of it to open its screen.
+	byNumber(ctx context.Context, r repoRef, number int) (pullRequest, error)
 	setDraft(ctx context.Context, pr pullRequest, draft bool) error
 	merge(ctx context.Context, d *prDetail, method string, auto bool) error
 	disableAutoMerge(ctx context.Context, d *prDetail) error
@@ -159,6 +161,10 @@ func sortPRs(prs []pullRequest, t tab) {
 
 func (s *githubSource) detail(ctx context.Context, pr pullRequest) (*prDetail, error) {
 	return s.client(pr.Host).detail(ctx, pr)
+}
+
+func (s *githubSource) byNumber(ctx context.Context, r repoRef, number int) (pullRequest, error) {
+	return s.client(r.Host).prByNumber(ctx, r, number)
 }
 
 func (s *githubSource) setDraft(ctx context.Context, pr pullRequest, draft bool) error {

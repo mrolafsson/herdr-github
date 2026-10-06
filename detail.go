@@ -124,7 +124,10 @@ func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgdown", " ":
 		m.scrollBody(max(1, m.bodyRoom()-2))
 	case "esc", "q", "left", "h":
-		m.screen, m.err, m.flash, m.curDetail = screenList, "", "", nil
+		if m.direct && (k.String() == "esc" || k.String() == "q") {
+			return m, tea.Quit // opened on this PR: there's no list to go back to
+		}
+		m.screen, m.err, m.flash, m.curDetail, m.direct = screenList, "", "", nil, false
 		m.clampCursor()
 	case "o":
 		m.openURL(pr.URL)
@@ -767,5 +770,9 @@ func (m model) detailFooter() []hint {
 		}
 		hs = append(hs, hint{"m merge", "m"})
 	}
-	return append(hs, hint{"o open", "o"}, hint{"y copy url", "y"}, hint{"esc back", "esc"})
+	hs = append(hs, hint{"o open", "o"}, hint{"y copy url", "y"})
+	if m.direct {
+		return append(hs, hint{"← lists", "left"}, hint{"esc close", "esc"})
+	}
+	return append(hs, hint{"esc back", "esc"})
 }

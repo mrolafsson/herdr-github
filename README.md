@@ -67,10 +67,26 @@ key = "prefix+alt+g"
 type = "plugin_action"
 command = "herdr-github.open"
 description = "GitHub: pull requests"
+
+# Optional: straight to the pull request of the agent you're in.
+[[keys.command]]
+key = "prefix+alt+p"
+type = "plugin_action"
+command = "herdr-github.pr"
+description = "GitHub: this agent's pull request"
 ```
 
-and reload with `herdr server reload-config`. Any action also runs without a
-key: `herdr plugin action invoke herdr-github.open`.
+and reload with `herdr server reload-config`.
+
+| key, as bound above | action              | does                                      |
+|---------------------|---------------------|-------------------------------------------|
+| `prefix+alt+g`      | `herdr-github.open` | the popup, on your lists                  |
+| `prefix+alt+p`      | `herdr-github.pr`   | the popup, straight on the PR of the agent you're in (see [A PR's agents](#a-prs-agents)) |
+
+Any action also runs without a key:
+`herdr plugin action invoke herdr-github.open`. Attached to another machine
+with `herdr --remote`? These bindings go in the config of the machine herdr's
+server runs on, where the plugin is.
 
 > On macOS, **alt** is the Option key, and most terminals type a character
 > with it (Option+G is `©`) unless it's set to act as Meta: iTerm2 →
@@ -115,7 +131,7 @@ Rows show the state (`●` open, `◌` draft), the number and title, then
 `conflicts` / `changes` / `approved`, `auto` if auto-merge is on, the checks
 (`✓` passed, `✗` failed, `●` running) and `⌥` if the worktree exists. A PR
 your agents have worked on names the first of them, and counts the rest:
-`◆ Offline sync conflicts +1` (see [A PR's agents](#a-prs-agents)). The
+`▸ Offline sync conflicts +1` (see [A PR's agents](#a-prs-agents)). The
 popup reopens on the tab you left.
 
 **Another repo.** The third tab starts on the repo of the space you opened
@@ -316,7 +332,8 @@ the status is the first thing to go.
 > *its* `config.toml` (reload with the UI's *reload config* action), while
 > the tokens come from the plugin on the machine the agents run on, so
 > that's where the plugin has to be installed. Rows changed on the server
-> change nothing you can see.
+> change nothing you can see. (Key bindings for the plugin's actions are the
+> other way round: they go in the server's config.)
 
 | token        | example                        |
 |--------------|--------------------------------|
@@ -360,10 +377,18 @@ track of every agent that has to do with an open PR:
 | **worked on it**  | another Claude Code session that looked at, pushed to or commented on it |
 
 - **In the popup**, a PR's row names its first agent and counts the rest
-  (`◆ Offline sync conflicts +1`), and the PR screen lists them, each with
+  (`▸ Offline sync conflicts +1`), and the PR screen lists them, each with
   its state. **ctrl+g** (**a** on the PR screen) goes to the agent's pane,
   asking which when there are several; so does a click on an agent. Typing
   an agent's name filters to its PRs.
+- **From an agent to its PR**, the other way round: **GitHub: this agent's
+  pull request** (`herdr-github.pr`, `prefix+alt+p` in the
+  [Install](#install) example) opens the popup straight on the PR of the
+  agent you're in, without the lists: its branch's PR, or the one it
+  opened. With several it asks which. With none it refreshes and looks
+  again (a PR opened a moment ago isn't known yet), and failing that
+  lands on this repo's list, saying so. From a PR opened this way **esc**
+  closes the popup, and **←** goes to the lists.
 - **A session that isn't in a pane** (you closed it, or it never ran in
   herdr) is listed too, dimmed, under the name Claude gave it. There's
   nowhere to go, so the key copies the command that resumes it:

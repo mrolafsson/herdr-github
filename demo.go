@@ -287,6 +287,19 @@ func (d *demoSource) detail(_ context.Context, pr pullRequest) (*prDetail, error
 	return &c, nil
 }
 
+func (d *demoSource) byNumber(_ context.Context, r repoRef, number int) (pullRequest, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, p := range d.prs {
+		if strings.ToLower(p.key()) == openedKey(r, number) {
+			pr := p.pullRequest
+			pr.Commits = rollupOf(p.Checks)
+			return pr, nil
+		}
+	}
+	return pullRequest{}, fmt.Errorf("%s#%d isn't there", r, number)
+}
+
 func (d *demoSource) setDraft(_ context.Context, pr pullRequest, draft bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()

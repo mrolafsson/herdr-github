@@ -713,6 +713,27 @@ func (c *ghClient) prsForBranches(ctx context.Context, r repoRef, heads []branch
 	return out, nil
 }
 
+// prByNumber is one pull request, as a list would have it.
+func (c *ghClient) prByNumber(ctx context.Context, r repoRef, number int) (pullRequest, error) {
+	var res struct {
+		Repository *struct {
+			PullRequest *pullRequest `json:"pullRequest"`
+		} `json:"repository"`
+	}
+	err := c.graphql(ctx, `query($owner: String!, $name: String!, $n: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $n) { ...PR } }
+}`+prFields, map[string]any{"owner": r.Owner, "name": r.Name, "n": number}, &res)
+	if res.Repository == nil || res.Repository.PullRequest == nil {
+		if err == nil || isPartial(err) {
+			err = fmt.Errorf("%s#%d isn't there, or isn't yours to see", r, number)
+		}
+		return pullRequest{}, err
+	}
+	pr := *res.Repository.PullRequest
+	pr.Host = c.host
+	return pr, nil
+}
+
 // prsByNumber is the status of pull requests in one repo, in a single query.
 // One that isn't there (or a repo that isn't) is left out.
 func (c *ghClient) prsByNumber(ctx context.Context, r repoRef, numbers []int) (map[int]prStatus, error) {

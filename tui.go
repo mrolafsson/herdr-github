@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type mode int
@@ -185,7 +186,12 @@ type model struct {
 	tabErr    map[tab]string       // why a tab's list couldn't load
 	worktrees map[string]bool      // pr.key() → its worktree exists
 	agents    map[string][]prAgent // openedKey → the PR's agents
-	checkouts map[string]string    // repo key → local checkout
+	// Opened on an agent's PR ("pr" action): opening is what's being fetched
+	// for it, shown in place of the lists; direct, that its screen is where
+	// you came in, so esc there closes the popup.
+	opening   string
+	direct    bool
+	checkouts map[string]string // repo key → local checkout
 	cursor    int
 	offset    int
 	// wantRepoRow: you moved onto the "change repo" row, so the cursor
@@ -449,6 +455,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case paneRefsMsg:
+		if len(msg) == 0 {
+			return m.noPRForAgent(), nil
+		}
+		return m.openOn(msg)
+
+	case prsResolvedMsg:
+		m.opening = ""
+		if msg.err != nil {
+			m.err = msg.err.Error()
+		}
+		return m.showPRs(msg.prs)
+
 	case agentsMsg:
 		m.agents = msg
 		m.clampCursor() // a filter on an agent's name now matches
@@ -527,6 +546,12 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+c" {
 		return m, tea.Quit
 	}
+	if m.opening != "" && m.mode != modeSignedOut {
+		if k.String() == "esc" || k.String() == "q" {
+			return m, tea.Quit
+		}
+		return m, nil
+	}
 	// An open menu takes the keys, loading or not: the repo list opened
 	// while a repo loads must work (and esc must close it, not the popup).
 	if m.menu != nil && m.mode != modeSignedOut && m.mode != modeBusy {
@@ -544,6 +569,9 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeBusy:
 		return m, nil
 	case modeLoading:
+		if m.screen != screenList {
+			break // a PR opened straight away doesn't wait for the lists behind it
+		}
 		switch k.String() {
 		case "esc":
 			return m, tea.Quit
@@ -917,6 +945,17 @@ func (m model) view() string {
 		return b.String()
 	}
 
+	if m.opening != "" {
+		// On the way to a PR: no lists in between.
+		b.WriteString("\n " + m.spin.View() + " " + m.opening + "\n")
+		for n := strings.Count(b.String(), "\n"); n < m.height-2; n++ {
+			b.WriteString("\n")
+		}
+		b.WriteString(m.statusLine())
+		b.WriteString(m.renderFooter(m.currentFooter()))
+		return b.String()
+	}
+
 	if m.screen != screenList {
 		b.WriteString("\n")
 		b.WriteString(m.viewPR())
@@ -1170,6 +1209,8 @@ func highlight(line string, w int) string {
 
 func (m model) currentFooter() []hint {
 	switch {
+	case m.opening != "":
+		return []hint{{"esc close", "esc"}}
 	case m.menu != nil:
 		return []hint{{"↑↓ choose", ""}, {"enter select", "enter"}, {"esc cancel", "esc"}}
 	case m.screen != screenList:
@@ -1421,7 +1462,9 @@ func (m model) viewMenu(room int) string {
 		if m.menu.filterable || m.menu.noDigits {
 			num = "·"
 		}
-		line := fmt.Sprintf("   %s %s", styleDim.Render(num), it.label)
+		// A long label (a PR's title) gives way to its detail, not the line.
+		label := shorten(it.label, max(20, m.width-ansi.StringWidth(it.detail)-10))
+		line := fmt.Sprintf("   %s %s", styleDim.Render(num), label)
 		if it.detail != "" {
 			line += styleDim.Render("  " + it.detail)
 		}
@@ -1483,7 +1526,12 @@ func runPicker(ctx context.Context, cfg config, demo bool) error {
 		m.remoteLoading = true
 		m.startCmd = m.loadRemoteRepos("")
 	}
-	if m.tab == tabRepo && m.repo == nil {
+	if pane, space := os.Getenv("HERDR_GITHUB_PANE"), os.Getenv("HERDR_GITHUB_SPACE"); !demo && pane+space != "" {
+		// Opened on an agent's PR ("pr" action): its screen, not the lists.
+		var cmd tea.Cmd
+		m, cmd = m.openForPane(pane, space)
+		m.startCmd = tea.Batch(m.startCmd, cmd)
+	} else if m.tab == tabRepo && m.repo == nil {
 		next, cmd := m.openRepoPicker()
 		m = next.(model)
 		m.startCmd = tea.Batch(m.startCmd, cmd)
