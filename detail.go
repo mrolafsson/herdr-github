@@ -144,6 +144,8 @@ func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.runWorktree(pr, false)
 	case "s":
 		return m.runWorktree(pr, true)
+	case "a":
+		return m.goToAgent(pr)
 	case "d":
 		return m.toggleDraft()
 	case "m":
@@ -529,8 +531,8 @@ func (m *model) scrollBody(delta int) {
 	m.scroll = min(max(0, m.scroll+delta), maxScroll(m.bodyLines(), m.bodyRoom()))
 }
 
-// prHeader is everything on the PR screen above the scrolling part.
-func (m model) prHeader() string {
+// prHeaderTop is the PR screen down to its branch: what's above its agents.
+func (m model) prHeaderTop() string {
 	pr := m.cur
 	w := max(20, m.width-2)
 	var b strings.Builder
@@ -551,6 +553,16 @@ func (m model) prHeader() string {
 		tree = styleTree.Render("⌥ worktree")
 	}
 	b.WriteString(m.field("Branch", head+styleDim.Render(" → ")+pr.BaseRefName+"  "+tree))
+	return b.String()
+}
+
+// prHeader is everything on the PR screen above the scrolling part.
+func (m model) prHeader() string {
+	pr := m.cur
+	var b strings.Builder
+	top := m.prHeaderTop()
+	b.WriteString(top)
+	b.WriteString(m.agentLines(*pr, 2+strings.Count(top, "\n"))) // under the tabs and a blank line
 	d := m.curDetail
 	if d != nil {
 		b.WriteString(m.field("Changes", styleOK.Render(fmt.Sprintf("+%d", d.Additions))+" "+styleErr.Render(fmt.Sprintf("−%d", d.Deletions))+
@@ -744,6 +756,9 @@ func mdEscape(s string) string {
 
 func (m model) detailFooter() []hint {
 	hs := []hint{{"w worktree", "w"}, {"s start", "s"}}
+	if m.cur != nil && len(m.agentsOf(*m.cur)) > 0 {
+		hs = append(hs, hint{"a " + plural(len(m.agentsOf(*m.cur)), "agent", "agents"), "a"})
+	}
 	if m.cur != nil && m.cur.State == "OPEN" {
 		if m.cur.IsDraft {
 			hs = append(hs, hint{"d ready", "d"})

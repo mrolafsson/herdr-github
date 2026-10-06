@@ -147,8 +147,15 @@ func (m model) handleMouse(ev tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.chooseMenu(i)
 	}
+	if i, ok := m.agentAt(ev.Y); ok {
+		return m.clickAgent(i)
+	}
 	if i, ok := m.rowAt(ev.Y); ok {
 		m.cursor, m.flash = i, ""
+		// On its agent, a click goes to the agent; anywhere else, to the PR.
+		if pr := m.rows()[i].pr; pr != nil && m.pointerOnAgent(pr) {
+			return m.goToAgent(*pr)
+		}
 		return m.handleKey(keyMsg("enter"))
 	}
 	return m, nil

@@ -29,11 +29,16 @@ type config struct {
 	// LabelRefreshSeconds is how old a repo's PR status may get before a
 	// herdr event refreshes it from GitHub.
 	LabelRefreshSeconds int `json:"label_refresh_seconds"`
+	// AgentPRs turns on reading Claude Code's transcripts for the PRs each
+	// session worked on: the $prs token, and the popup's list of a PR's agents.
+	AgentPRs *bool `json:"agent_prs"`
 	// Theme for rendered Markdown: "dark", "light", or empty to ask the terminal.
 	Theme string `json:"theme"`
 }
 
 func (c config) labelsOn() bool { return c.Labels == nil || *c.Labels }
+
+func (c config) agentPRsOn() bool { return c.AgentPRs == nil || *c.AgentPRs }
 
 func pluginID() string {
 	if id := os.Getenv("HERDR_PLUGIN_ID"); id != "" {

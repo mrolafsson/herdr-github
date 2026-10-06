@@ -89,11 +89,23 @@ func notify(title, body string) {
 }
 
 type paneInfo struct {
-	PaneID      string            `json:"pane_id"`
-	WorkspaceID string            `json:"workspace_id"`
-	Agent       string            `json:"agent"`
-	AgentStatus string            `json:"agent_status"`
-	Tokens      map[string]string `json:"tokens"`
+	PaneID        string            `json:"pane_id"`
+	WorkspaceID   string            `json:"workspace_id"`
+	TerminalID    string            `json:"terminal_id"`
+	Label         string            `json:"label"`
+	Title         string            `json:"title"`
+	TerminalTitle string            `json:"terminal_title_stripped"`
+	Agent         string            `json:"agent"`
+	AgentStatus   string            `json:"agent_status"`
+	AgentSession  *agentSession     `json:"agent_session"`
+	Tokens        map[string]string `json:"tokens"`
+}
+
+// agentSession is how a pane's agent names its own session: for Claude, the
+// ID its transcript is filed under.
+type agentSession struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
 }
 
 type workspaceInfo struct {

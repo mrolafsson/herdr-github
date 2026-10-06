@@ -6,5 +6,6 @@
   "agent_wait_seconds": 90,
   "labels": true,
   "label_refresh_seconds": 60,
+  "agent_prs": true,
   "theme": "dark"
 }

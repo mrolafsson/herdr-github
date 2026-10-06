@@ -16,6 +16,7 @@ import (
 // space that is a git checkout, works out the pull request for the branch it's
 // on, and reports it as display-only tokens on the space and on each agent
 // pane in it. You show them by adding e.g. "$pr_badge" to a sidebar row.
+// $prs is that PR and the ones the agents there opened, as one list (agents.go).
 //
 // It is cheap when nothing is due: herdr fires events often, so a tick within
 // a few seconds of the last one does nothing, and GitHub is only asked about a
@@ -31,17 +32,25 @@ const (
 	tickTimeLimit = 45 * time.Second
 )
 
-// tokenNames are every token this plugin sets, so a space whose PR went away
-// has all of them cleared.
-var tokenNames = []string{"pr", "pr_badge", "pr_state", "pr_checks", "pr_review"}
+// branchTokenNames are the tokens for a branch's PR; tokenNames are every
+// token this plugin sets, so a space whose PR went away has all of them
+// cleared.
+var (
+	branchTokenNames = []string{"pr", "pr_badge", "pr_state", "pr_checks", "pr_review"}
+	tokenNames       = append([]string{"prs"}, branchTokenNames...)
+)
 
-// labelState is labels.json: what GitHub last said per branch, and when the
-// tokens were last sent.
+// labelState is labels.json: what GitHub last said per branch, when the
+// tokens were last sent, and the PRs Claude's sessions worked on.
 type labelState struct {
 	LastTick time.Time              `json:"last_tick"`
 	Branches map[string]branchEntry `json:"branches"` // host/owner/repo + "\x00" + owner:branch
 	Reported map[string]reported    `json:"reported"` // space or pane ID → what was sent
 	Failed   map[string]time.Time   `json:"failed"`   // repo key → when GitHub last failed to answer
+	PRs      map[string]trackedPR   `json:"prs"`      // openedKey → an open PR and its sessions
+	Sessions map[string]sessionSeen `json:"sessions"` // Claude session → its name, and its pane
+	Scanned  map[string]int64       `json:"scanned"`  // transcript → how far it's been read
+	Swept    time.Time              `json:"swept"`    // when the transcripts were last gone through
 }
 
 type branchEntry struct {
@@ -70,6 +79,15 @@ func readLabelState() labelState {
 	}
 	if s.Failed == nil {
 		s.Failed = map[string]time.Time{}
+	}
+	if s.PRs == nil {
+		s.PRs = map[string]trackedPR{}
+	}
+	if s.Sessions == nil {
+		s.Sessions = map[string]sessionSeen{}
+	}
+	if s.Scanned == nil {
+		s.Scanned = map[string]int64{}
 	}
 	return s
 }
@@ -169,6 +187,22 @@ func tokenParams(t map[string]string) map[string]any {
 		} else {
 			out[n] = nil
 		}
+	}
+	return out
+}
+
+// tokensFor is what a space or pane should show: its branch's PR, and that
+// PR with the ones opened there as one list.
+func tokensFor(branch map[string]string, prs string) map[string]string {
+	if len(branch) == 0 && prs == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for k, v := range branch {
+		out[k] = v
+	}
+	if prs != "" {
+		out["prs"] = prs
 	}
 	return out
 }
@@ -296,6 +330,17 @@ func tick(ctx context.Context, cfg config, force bool) error {
 	if err != nil {
 		return err
 	}
+	// What the agents have worked on: wanted by the popup too, labels or
+	// not. Without herdr's panes there's no telling who is where: leave it.
+	panes, panesErr := listPanes("")
+	var openedErr error
+	switch {
+	case !cfg.agentPRsOn():
+		st.PRs, st.Sessions, st.Scanned, st.Swept = map[string]trackedPR{}, map[string]sessionSeen{}, map[string]int64{}, time.Time{}
+	case panesErr == nil:
+		st.trackSessions(cfg, panes, now)
+		openedErr = st.refreshTracked(ctx, cfg, now, force)
+	}
 	if !cfg.labelsOn() {
 		return clearAll(st, wss)
 	}
@@ -355,25 +400,28 @@ func tick(ctx context.Context, cfg config, force bool) error {
 	}
 
 	// Report: to each space, and each agent pane in it.
-	panes, _ := listPanes("")
 	byWS := map[string][]paneInfo{}
 	for _, p := range panes {
 		byWS[p.WorkspaceID] = append(byWS[p.WorkspaceID], p)
 	}
+	openBy := st.openByPane()
 	live := map[string]bool{}
 	for _, w := range wss {
 		live[w.WorkspaceID] = true
+		var opened []trackedPR
 		for _, p := range byWS[w.WorkspaceID] {
 			live[p.PaneID] = true
+			opened = append(opened, openBy[p.PaneID]...)
 		}
-		var want map[string]string
-		key := ""
+		var branchPR *prStatus
+		key, branchKey := "", ""
 		if sb, ok := spaces[w.WorkspaceID]; ok {
 			key = sb.cacheKey()
 			e, known := st.Branches[key]
 			switch {
+			case known && e.PR != nil:
+				branchPR, branchKey = e.PR, openedKey(sb.repo, e.PR.Number)
 			case known:
-				want = badgeTokens(e.PR)
 			case st.Reported[w.WorkspaceID].Branch == key || st.Reported[w.WorkspaceID].Branch == "":
 				continue // GitHub couldn't say: leave what's shown
 			default:
@@ -381,13 +429,18 @@ func tick(ctx context.Context, cfg config, force bool) error {
 				// what's shown is the old branch's PR, so it goes.
 			}
 		}
-		st.report("workspace", w.WorkspaceID, want, w.Tokens, now, key)
+		branch := badgeTokens(branchPR)
+		prs := prsToken(branchPR, branchKey, opened)
+		if panesErr != nil {
+			prs = w.Tokens["prs"] // herdr didn't list the panes: what was opened here isn't known
+		}
+		st.report("workspace", w.WorkspaceID, tokensFor(branch, prs), w.Tokens, now, key)
 		for _, p := range byWS[w.WorkspaceID] {
-			pw := want
-			if p.Agent == "" {
-				pw = nil // only agents are labelled; a shell keeps its own
+			var want map[string]string
+			if p.Agent != "" { // only agents are labelled; a shell keeps its own
+				want = tokensFor(branch, prsToken(branchPR, branchKey, openBy[p.PaneID]))
 			}
-			st.report("pane", p.PaneID, pw, p.Tokens, now, key)
+			st.report("pane", p.PaneID, want, p.Tokens, now, key)
 		}
 	}
 	// Forget spaces and panes that are gone, and branches nobody is on.
@@ -408,18 +461,24 @@ func tick(ctx context.Context, cfg config, force bool) error {
 	if err := writeLabelState(st); err != nil {
 		return err
 	}
-	return lookupErr
+	return errors.Join(lookupErr, openedErr)
 }
 
-// report sends tokens to a space or pane when they differ from what it shows
-// (current, as herdr lists it) or are getting old.
-func (st *labelState) report(kind, id string, want, current map[string]string, now time.Time, branch string) {
+// shown picks our tokens out of all that a space or pane shows.
+func shown(current map[string]string) map[string]string {
 	ours := map[string]string{}
 	for _, n := range tokenNames {
 		if v, ok := current[n]; ok {
 			ours[n] = v
 		}
 	}
+	return ours
+}
+
+// report sends tokens to a space or pane when they differ from what it shows
+// (current, as herdr lists it) or are getting old.
+func (st *labelState) report(kind, id string, want, current map[string]string, now time.Time, branch string) {
+	ours := shown(current)
 	last, sent := st.Reported[id]
 	switch {
 	case want == nil && len(ours) == 0:

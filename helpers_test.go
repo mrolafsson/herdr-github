@@ -23,6 +23,7 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("HERDR_PLUGIN_STATE_DIR", dir+"/state")
 	os.Setenv("HERDR_PLUGIN_CONFIG_DIR", dir+"/config")
+	os.Setenv("CLAUDE_CONFIG_DIR", dir+"/claude")
 	for _, v := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
 		os.Unsetenv(v)
 	}
@@ -68,6 +69,7 @@ func demoModel(t *testing.T, tb tab) model {
 		m = next.(model)
 	}
 	next, _ := m.Update(worktreesMsg{marks: d.worktreeMarks(), gen: m.gen})
+	next, _ = next.(model).Update(agentsMsg(d.agents()))
 	return next.(model)
 }
 

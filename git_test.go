@@ -435,7 +435,7 @@ func TestTickLabelsSpacesAndAgents(t *testing.T) {
 	if reportFor(reports, "workspace_id", "w2") != nil || reportFor(reports, "workspace_id", "w4") != nil {
 		t.Fatal("spaces with no PR and no tokens should be left alone")
 	}
-	if p1 := reportFor(reports, "pane_id", "p1"); p1 == nil || p1["tokens"].(map[string]any)["pr"] != "#12" {
+	if p1 := reportFor(reports, "pane_id", "p1"); p1 == nil || p1["tokens"].(map[string]any)["pr"] != "#12" || p1["tokens"].(map[string]any)["prs"] != "#12 ✓ approved" {
 		t.Fatalf("agent pane: %v", p1)
 	}
 	if reportFor(reports, "pane_id", "p2") != nil {
@@ -443,7 +443,7 @@ func TestTickLabelsSpacesAndAgents(t *testing.T) {
 	}
 
 	// herdr now shows the tokens; within the cooldown nothing happens at all.
-	h.workspaces[0].Tokens = map[string]string{"pr": "#12", "pr_badge": "#12 ✓ approved", "pr_state": "open", "pr_checks": "✓", "pr_review": "approved"}
+	h.workspaces[0].Tokens = map[string]string{"pr": "#12", "pr_badge": "#12 ✓ approved", "pr_state": "open", "pr_checks": "✓", "pr_review": "approved", "prs": "#12 ✓ approved"}
 	at(time.Second)
 	_ = tick(ctx, cfg, false)
 	if len(asked) != 1 || len(h.takeReports()) != 0 {
