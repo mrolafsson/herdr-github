@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0 — 2026-10-11
+
+- **`esc` goes back to the popup you came from.** herdr-recap opens this
+  popup on an agent's pull request; closing it with `esc` now opens Recap
+  again, on that agent. Any plugin can ask for the same with
+  `HERDR_POPUP_RETURN` (see *Opened from another popup* in the README).
+
 ## 0.5.0 — 2026-10-06
 
 - **One look, shared with herdr-linear and herdr-recap.** A title, a branch,
