@@ -125,7 +125,7 @@ func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.scrollBody(max(1, m.bodyRoom()-2))
 	case "esc", "q", "left", "h":
 		if m.direct && (k.String() == "esc" || k.String() == "q") {
-			return m, tea.Quit // opened on this PR: there's no list to go back to
+			return m.leave() // opened on this PR: there's no list to go back to
 		}
 		m.screen, m.err, m.flash, m.curDetail, m.direct = screenList, "", "", nil, false
 		m.clampCursor()
@@ -775,7 +775,7 @@ func (m model) detailFooter() []hint {
 	}
 	hs = append(hs, hint{"o open", "o", hintView}, hint{"y copy url", "y", hintView})
 	if m.direct {
-		return append(hs, hint{"← lists", "left", hintView}, hint{"esc close", "esc", hintQuiet})
+		return append(hs, hint{"← lists", "left", hintView}, hint{m.escLabel(), "esc", hintQuiet})
 	}
 	return append(hs, hint{"esc back", "esc", hintQuiet})
 }

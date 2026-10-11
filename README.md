@@ -36,7 +36,30 @@ opened it and any that worked on it since, a key or a click away.
   you can click. In **herdr's theme colours**, with [one look](#colours)
   shared by the herdr plugins.
 
-**Contents:** [Requirements](#requirements) · [Install](#install) ·
+## Works with the other herdr plugins
+
+This is one of three plugins that are useful alone and better together.
+Install [herdr-recap](https://github.com/mrolafsson/herdr-recap) or [herdr-linear](https://github.com/mrolafsson/herdr-linear) alongside it and they find each other:
+there is nothing to configure.
+
+| Plugin | What it adds to the others |
+| --- | --- |
+| [herdr-recap](https://github.com/mrolafsson/herdr-recap) | Every agent in one list. An agent's pull request and its Linear issue are links there: a click, or `ctrl+g` / `ctrl+l`, opens it in the plugin it belongs to. |
+| **[herdr-github](https://github.com/mrolafsson/herdr-github)** (this one) | Tags every space and agent with its branch's pull request (`#482 ✓ approved`), which Recap shows and groups its agents by. Opens straight on an agent's PR when Recap asks. |
+| [herdr-linear](https://github.com/mrolafsson/herdr-linear) | Tags every space and agent with the Linear issue its branch is named for (`ENG-142 In Progress`), which Recap shows. Opens straight on that issue when Recap asks. |
+
+- **Auto-discovery.** Each plugin asks herdr which others are installed and
+  enabled. A link only appears when the plugin behind it is there; without
+  it the same text is shown, as text, and its key is left out.
+- **Clickable, and there and back.** herdr shows one popup at a time, so
+  following a link turns the open popup into the other plugin's, in place and
+  without a flicker, and `esc` there brings you back to where you were.
+- **Shared look.** A title, a branch, a pull request and a key are
+  drawn the same in all three, in herdr's theme colours.
+
+See [Sidebar labels](#sidebar-labels) for the tags and [Opened from another popup](#opened-from-another-popup) for the convention behind the links.
+
+**Contents:** [Works with the other plugins](#works-with-the-other-herdr-plugins) · [Requirements](#requirements) · [Install](#install) ·
 [Try it without an account](#try-it-without-an-account) · [Use](#use) ·
 [Merging](#merging) · [Worktrees](#worktrees) · [Sidebar labels](#sidebar-labels) ·
 [Configuration](#configuration) · [Privacy and security](#privacy-and-security) ·
@@ -417,6 +440,20 @@ is merged or closed it's forgotten.
 It can't know about a PR opened in the browser or on another machine, and
 of another kind of agent it knows only the branch it's on. Turn it off with
 `"agent_prs": false`.
+
+### Opened from another popup
+
+[herdr-recap](https://github.com/mrolafsson/herdr-recap) opens this popup on
+an agent's pull request (a click on the PR in its list). herdr shows one
+popup at a time, so Recap's popup becomes this one in place, and says where it was in
+`HERDR_POPUP_RETURN`: a popup as JSON, in the shape of herdr's
+`plugin.pane.open` (`{"plugin_id", "entrypoint", "width", "height", "env"}`).
+Opened that way, `esc` reads *back* and opens that popup again; `ctrl+c`, or
+going to a worktree or an agent, just closes.
+
+Any plugin can open this one the same way: `HERDR_GITHUB_PANE` and
+`HERDR_GITHUB_SPACE` are the agent whose pull request to open on, as the
+`pr` action sets them.
 
 ## Configuration
 

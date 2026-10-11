@@ -25,6 +25,8 @@ const usage = `herdr-github — GitHub pull requests in herdr
   tick [--force]   refresh the sidebar labels ($pr, $pr_badge, …); herdr runs
                    this on its events. --force asks GitHub again right away
   status           which GitHub hosts gh is signed in to, as the plugin sees it
+  handoff JSON     (internal) open the popup this one was opened from, once
+                   this one has closed
   kickoff W P      (internal) wait for pane P's agent in workspace W, then
                    send it the prompt read from stdin
 `
@@ -66,13 +68,21 @@ func run(ctx context.Context, args []string) error {
 		return runAction(ctx, cfg, args[1])
 	case "picker":
 		demo := os.Getenv("HERDR_GITHUB_DEMO") == "1" || (len(args) > 1 && args[1] == "--demo")
-		return runPicker(ctx, cfg, demo)
+		if err := runPicker(ctx, cfg, demo); err != nil {
+			return err
+		}
+		return finishSwap()
 	case "tick":
 		force := len(args) > 1 && args[1] == "--force"
 		if err := tick(ctx, cfg, force); err != nil && !isQuietTickErr(err) {
 			return err
 		}
 		return nil
+	case "handoff":
+		if len(args) != 2 {
+			return errors.New("handoff needs a popup")
+		}
+		return runHandoff(args[1])
 	case "status":
 		return status(ctx, cfg)
 	case "kickoff":

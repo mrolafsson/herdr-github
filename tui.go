@@ -161,8 +161,11 @@ type model struct {
 	// Opened on an agent's PR ("pr" action): opening is what's being fetched
 	// for it, shown in place of the lists; direct, that its screen is where
 	// you came in, so esc there closes the popup.
-	opening   string
-	direct    bool
+	opening string
+	direct  bool
+	// back is the popup this one was opened from (another plugin's): esc
+	// closes this one for it.
+	back      *popupRef
 	checkouts map[string]string // repo key → local checkout
 	cursor    int
 	offset    int
@@ -514,13 +517,32 @@ func (m model) refreshAll() (model, tea.Cmd) {
 	return m, tea.Batch(m.spin.Tick, m.loadAll())
 }
 
+// leave closes the popup (esc): for the one it was opened from, if it was.
+// Going to a worktree or an agent, or ctrl+c, just closes it.
+func (m model) leave() (tea.Model, tea.Cmd) {
+	if m.back != nil {
+		if err := handOver(*m.back); err != nil {
+			debugf("back to %s: %v", m.back.PluginID, err)
+		}
+	}
+	return m, tea.Quit
+}
+
+// escLabel is what esc is said to do where it closes the popup.
+func (m model) escLabel() string {
+	if m.back != nil {
+		return "esc back"
+	}
+	return "esc close"
+}
+
 func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+c" {
 		return m, tea.Quit
 	}
 	if m.opening != "" && m.mode != modeSignedOut {
 		if k.String() == "esc" || k.String() == "q" {
-			return m, tea.Quit
+			return m.leave()
 		}
 		return m, nil
 	}
@@ -535,7 +557,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m, m.login()
 		case "esc", "q":
-			return m, tea.Quit
+			return m.leave()
 		}
 		return m, nil
 	case modeBusy:
@@ -546,7 +568,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		switch k.String() {
 		case "esc":
-			return m, tea.Quit
+			return m.leave()
 		case "ctrl+t":
 			// A slow repo doesn't hold you there: pick another meanwhile.
 			if m.screen == screenList && m.menu == nil {
@@ -578,7 +600,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.clampCursor()
 			return m, nil
 		}
-		return m, tea.Quit
+		return m.leave()
 	case "tab", "shift+tab":
 		next := (m.tab + 1) % 3
 		if k.String() == "shift+tab" {
@@ -1183,7 +1205,7 @@ func highlight(line string, w int) string {
 func (m model) currentFooter() []hint {
 	switch {
 	case m.opening != "":
-		return []hint{{"esc close", "esc", hintQuiet}}
+		return []hint{{m.escLabel(), "esc", hintQuiet}}
 	case m.menu != nil:
 		return []hint{{"↑↓ choose", "", hintView}, {"enter select", "enter", hintGo}, {"esc cancel", "esc", hintQuiet}}
 	case m.screen != screenList:
@@ -1198,7 +1220,7 @@ func (m model) currentFooter() []hint {
 	if m.tab == tabRepo {
 		hs = append(hs, hint{"^t repo", "ctrl+t", hintView})
 	}
-	return append(hs, hint{"^r refresh", "ctrl+r", hintView}, hint{"tab switch", "tab", hintView}, hint{"esc close", "esc", hintQuiet})
+	return append(hs, hint{"^r refresh", "ctrl+r", hintView}, hint{"tab switch", "tab", hintView}, hint{m.escLabel(), "esc", hintQuiet})
 }
 
 // ── menus ─────────────────────────────────────────────────────────────────────
@@ -1501,6 +1523,9 @@ func runPicker(ctx context.Context, cfg config, demo bool) error {
 		m.repoRemote = readRepoCache(cfg)
 		m.remoteLoading = true
 		m.startCmd = m.loadRemoteRepos("")
+	}
+	if !demo {
+		m.back = cameFrom()
 	}
 	if pane, space := os.Getenv("HERDR_GITHUB_PANE"), os.Getenv("HERDR_GITHUB_SPACE"); !demo && pane+space != "" {
 		// Opened on an agent's PR ("pr" action): its screen, not the lists.
