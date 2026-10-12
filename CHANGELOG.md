@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.1 — 2026-10-12
+
+- The tabs no longer say **GitHub** before them: the popup's frame already
+  does. The tab you're on lines up with the keys along the bottom.
+
 ## 0.8.0 — 2026-10-12
 
 - **An agent can still be found by a PR it's done with.** A PR an agent
