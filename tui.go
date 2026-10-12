@@ -98,16 +98,18 @@ func prStateWord(pr pullRequest) string {
 	return "Open"
 }
 
-// checksBadge is the head commit's checks as one coloured glyph.
+// checksBadge is the head commit's checks, said: "✓ checks" passed, "✗
+// checks" failed, "● checks" running. The mark alone would read as an
+// agent's, which the same line may end with.
 func checksBadge(state string) string {
 	g := checkGlyph(state)
 	switch g {
 	case "✓":
-		return styleOK.Render(g)
+		return styleOK.Render(g + " checks")
 	case "✗":
-		return styleErr.Render(g)
+		return styleErr.Render(g + " checks")
 	case "●":
-		return styleWarn.Render(g)
+		return styleWarn.Render(g + " checks")
 	}
 	return ""
 }
@@ -121,15 +123,12 @@ func colored(glyph, hex string) string {
 
 // ── model ─────────────────────────────────────────────────────────────────────
 
+// row is something in a list to select: a pull request, or the repo tab's
+// "change repo" row. The groups' headings are drawn between them (groups.go).
 type row struct {
-	header string // non-empty: a group heading, not selectable
-	spacer bool   // the blank line above a heading, not selectable
-	pr     *pullRequest
-	repo   bool // the repo tab's "change repo" row
+	pr   *pullRequest
+	repo bool
 }
-
-// label rows are there to be read, never selected.
-func (r row) label() bool { return r.header != "" || r.spacer }
 
 type model struct {
 	ctx     context.Context
@@ -169,6 +168,9 @@ type model struct {
 	checkouts map[string]string // repo key → local checkout
 	cursor    int
 	offset    int
+	// chose: you put the cursor where it is. Until then it stays on the
+	// first PR, whatever a fresher list puts there.
+	chose bool
 	// wantRepoRow: you moved onto the "change repo" row, so the cursor
 	// stays there when the list under it changes.
 	wantRepoRow bool
@@ -201,11 +203,17 @@ type model struct {
 
 func newModel(ctx context.Context, cfg config, client source, invoked string, repo *repoRef) model {
 	ti := textinput.New()
-	ti.Prompt = "› "
-	ti.Placeholder = "filter"
+	// Its text lines up with the PRs' numbers.
+	ti.Prompt = " › "
+	ti.Placeholder = "Type to filter… ← → to change tabs"
+	ti.PromptStyle, ti.PlaceholderStyle = styleDim, styleDim
 	ti.Focus()
 	sp := spinner.New()
-	sp.Spinner = spinner.MiniDot
+	// A pie filling and emptying: in progress, and unlike braille it's in
+	// common monospace fonts such as JetBrains Mono (a glyph from a fallback
+	// font can come out the wrong width).
+	sp.Spinner = spinner.Spinner{Frames: []string{"◔", "◕"}, FPS: time.Second / 3}
+	sp.Style = lipgloss.NewStyle()
 	_, demo := client.(*demoSource)
 	return model{
 		ctx: ctx, cfg: cfg, client: client, demo: demo, invoked: invoked, home: repo, repo: repo,
@@ -224,6 +232,7 @@ func (m model) Init() tea.Cmd {
 // useCache shows the lists the last popup loaded until fresh ones arrive.
 func (m model) useCache(lists map[tab][]pullRequest) model {
 	for t, prs := range lists {
+		sortPRs(prs, t) // as a fresh list is, however it was kept
 		m.prs[t], m.loaded[t], m.stale[t] = prs, true, true
 	}
 	if m.loaded[m.tab] {
@@ -389,7 +398,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loaded[t], m.stale[t], m.paging[t], m.tabErr[t] = true, false, false, msg.err.Error()
 			return m, nil
 		}
-		keep := m.selectedKey()
+		keep := ""
+		if m.chose {
+			keep = m.selectedKey()
+		}
 		if msg.cursor == "" {
 			m.prs[t] = append([]pullRequest(nil), msg.prs...)
 		} else {
@@ -596,7 +608,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		if m.filter.Value() != "" {
 			m.filter.SetValue("")
-			m.cursor, m.offset = 0, 0
+			m.cursor, m.offset, m.chose = 0, 0, false
 			m.clampCursor()
 			return m, nil
 		}
@@ -623,10 +635,10 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(1)
 		return m, nil
 	case "pgup":
-		m.move(-m.listHeight())
+		m.move(-m.visibleRows())
 		return m, nil
 	case "pgdown":
-		m.move(m.listHeight())
+		m.move(m.visibleRows())
 		return m, nil
 	case "ctrl+r":
 		return m.reloadLists()
@@ -667,7 +679,7 @@ func (m model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.filter, cmd = m.filter.Update(k)
 	if m.filter.Value() != prev {
-		m.cursor, m.offset = 0, 0
+		m.cursor, m.offset, m.chose = 0, 0, false
 		m.clampCursor()
 	}
 	return m, cmd
@@ -678,7 +690,7 @@ func (m model) switchTab(t tab) (tea.Model, tea.Cmd) {
 	if !m.demo {
 		rememberTab(t)
 	}
-	m.cursor, m.offset, m.wantRepoRow = 0, 0, false
+	m.cursor, m.offset, m.wantRepoRow, m.chose = 0, 0, false, false
 	switch {
 	case t == tabRepo && m.repo == nil:
 		// No repo here to show: show the repos to choose from.
@@ -788,47 +800,13 @@ func (m model) rows() []row {
 		// enter away: no key to remember.
 		rows = append(rows, row{repo: true})
 	}
-	last := "\x00"
 	list := m.prs[m.tab]
 	for i := range list {
-		pr := &list[i]
-		if !pr.matches(q, agentNames(m.agentsOf(*pr))) {
-			continue
+		if pr := &list[i]; pr.matches(q, agentNames(m.agentsOf(*pr))) {
+			rows = append(rows, row{pr: pr})
 		}
-		group := m.groupOf(*pr)
-		if group != last {
-			if len(rows) > 0 {
-				rows = append(rows, row{spacer: true})
-			}
-			rows = append(rows, row{header: group})
-			last = group
-		}
-		rows = append(rows, row{pr: pr})
-	}
-	// Under the repo row, say why there are no PRs below it.
-	if m.tab == tabRepo && len(rows) == 1 && m.repo != nil {
-		text := m.emptyText()
-		if !m.loaded[tabRepo] || m.mode == modeLoading {
-			text = m.spin.View() + " Loading…"
-		}
-		rows = append(rows, row{spacer: true}, row{header: text})
 	}
 	return rows
-}
-
-// groupOf is the heading a PR is listed under: its repo, or in the repo tab
-// whether it's ready or a draft.
-func (m model) groupOf(pr pullRequest) string {
-	if m.tab == tabRepo {
-		if pr.IsDraft {
-			return "Drafts"
-		}
-		return "Open"
-	}
-	if pr.Host != "github.com" && pr.Host != "" {
-		return pr.Host + "/" + pr.Repository.NameWithOwner
-	}
-	return pr.Repository.NameWithOwner
 }
 
 // selected is the PR row under the cursor, if that's where it is.
@@ -851,62 +829,98 @@ func (m *model) move(delta int) {
 	if len(rows) == 0 {
 		return
 	}
-	step := 1
-	if delta < 0 {
-		step = -1
-	}
-	c := min(max(m.cursor+delta, 0), len(rows)-1)
-	// Skip headings and spacers, in the direction of travel, then back if we ran off.
-	for c >= 0 && c < len(rows) && rows[c].label() {
-		c += step
-	}
-	if c < 0 || c >= len(rows) {
-		c = m.cursor
-	}
-	m.cursor = c
-	m.wantRepoRow = rows[c].repo
+	m.cursor, m.chose = min(max(m.cursor+delta, 0), len(rows)-1), true
+	m.wantRepoRow = rows[m.cursor].repo
 	m.scrollTo()
 }
 
 func (m *model) clampCursor() {
 	rows := m.rows()
-	if m.cursor >= len(rows) {
-		m.cursor = len(rows) - 1
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
+	m.cursor = max(0, min(m.cursor, len(rows)-1))
 	// The cursor starts on the first PR, not the "change repo" row above
 	// it, unless you went there.
-	hasPR := false
-	for _, r := range rows {
-		hasPR = hasPR || r.pr != nil
-	}
-	for m.cursor < len(rows) && (rows[m.cursor].label() || (rows[m.cursor].repo && hasPR && !m.wantRepoRow)) {
+	if len(rows) > 1 && rows[m.cursor].repo && !m.wantRepoRow {
 		m.cursor++
 	}
 	m.scrollTo()
 }
 
+// rowHeight is a row's lines on screen, as viewRow draws them, counted
+// without drawing: scrolling and the mouse ask for it a lot. (A test holds
+// the two to each other.)
+func (m model) rowHeight(r row) int {
+	if r.pr != nil && m.detailed(*r.pr) {
+		return 3 // title, details, a blank after
+	}
+	return 2
+}
+
+// scrollTo keeps the selected row on screen, heading and all.
 func (m *model) scrollTo() {
-	h := m.listHeight()
+	rows := m.rows()
 	if m.cursor < m.offset {
 		m.offset = m.cursor
-		// Keep the group heading above the first row visible.
-		if m.offset > 0 {
-			if rows := m.rows(); rows[m.offset-1].header != "" {
-				m.offset--
-			}
+	}
+	// Back at the first PR, the "change repo" row above it shows again,
+	// room allowing.
+	if m.offset == 1 && rows[0].repo {
+		m.offset = 0
+	}
+	for m.offset < m.cursor && m.cursor < len(rows) {
+		used := 0
+		for i := m.offset; i <= m.cursor; i++ {
+			used += m.headingHeight(rows, i) + m.rowHeight(rows[i])
 		}
+		if used <= m.listHeight()+1 { // the last row's trailing blank may not fit
+			break
+		}
+		m.offset++
 	}
-	if m.cursor >= m.offset+h {
-		m.offset = m.cursor - h + 1
+	m.offset = max(0, min(m.offset, len(rows)-1))
+}
+
+// visibleRows is how many whole rows fit from the offset: a page.
+func (m model) visibleRows() int {
+	rows := m.rows()
+	n, used := 0, 0
+	for i := m.offset; i < len(rows); i++ {
+		used += m.headingHeight(rows, i) + m.rowHeight(rows[i])
+		if used > m.listHeight()+1 {
+			break
+		}
+		n++
 	}
+	return max(1, n)
+}
+
+// rowLineAt is the row drawn on screen line y, and which of its lines that
+// is (0 its title).
+func (m model) rowLineAt(y int) (i, line int, ok bool) {
+	if m.screen != screenList || m.menu != nil {
+		return 0, 0, false
+	}
+	rows := m.rows()
+	top, end := listTop, listTop+m.listHeight()
+	for i := m.offset; i < len(rows) && top < end; i++ {
+		top += m.headingHeight(rows, i) // a group's heading isn't a row
+		h := m.rowHeight(rows[i])
+		if y >= top && y < min(top+h-1, end) { // not its trailing blank
+			return i, y - top, true
+		}
+		top += h
+	}
+	return 0, 0, false
+}
+
+// rowAt is the row drawn on screen line y, if any.
+func (m model) rowAt(y int) (int, bool) {
+	i, _, ok := m.rowLineAt(y)
+	return i, ok
 }
 
 func (m model) listHeight() int {
-	// tabs + filter + blank above; status line + footer below, the footer on
-	// the popup's last line (mouse.go counts on that).
+	// tabs + blank + filter + blank above; status line + footer below, the
+	// footer on the popup's last line (mouse.go counts on that).
 	return max(3, m.height-listTop-2)
 }
 
@@ -962,7 +976,7 @@ func (m model) view() string {
 		return b.String()
 	}
 
-	b.WriteString(m.filter.View() + "\n\n")
+	b.WriteString("\n" + m.filter.View() + "\n\n")
 	h := m.listHeight()
 	if m.menu != nil {
 		menu := m.viewMenu(h)
@@ -972,18 +986,33 @@ func (m model) view() string {
 		}
 	} else {
 		rows := m.rows()
-		switch {
-		case m.mode == modeLoading && len(rows) == 0:
-			b.WriteString("  " + m.spin.View() + " Loading…\n")
-			h--
-		case len(rows) == 0:
-			b.WriteString(styleDim.Render("  "+m.emptyText()) + "\n")
-			h--
+		used := 0
+		write := func(lines ...string) {
+			for _, l := range lines {
+				if used < h {
+					b.WriteString(l + "\n")
+					used++
+				}
+			}
 		}
-		for i := m.offset; i < len(rows) && i < m.offset+h; i++ {
-			b.WriteString(m.viewRow(rows[i], i == m.cursor) + "\n")
+		for i := m.offset; i < len(rows) && used < h; i++ {
+			if m.headed(rows, i) {
+				if h-used < 3 {
+					break // a heading with nothing under it says nothing
+				}
+				write(m.viewHeading(rows, groupOf(*rows[i].pr, m.tab)), "")
+			}
+			write(m.viewRow(rows[i], i == m.cursor)...)
 		}
-		for i := len(rows) - m.offset; i < h; i++ {
+		// With no PRs to list (under the repo row, in its tab), say why.
+		switch prs := len(rows) > 0 && rows[len(rows)-1].pr != nil; {
+		case prs:
+		case !m.loaded[m.tab] || m.mode == modeLoading:
+			write("  " + m.spin.View() + " Loading…")
+		default:
+			write(styleDim.Render("  " + m.emptyText()))
+		}
+		for ; used < h; used++ {
 			b.WriteString("\n")
 		}
 	}
@@ -1019,40 +1048,36 @@ func (m model) statusLine() string {
 		return " " + styleOK.Render("✓ ") + shorten(clean(m.flash, false), max(10, m.width-4)) + "\n"
 	case m.screen == screenList && m.tabErr[m.tab] != "":
 		return " " + styleErr.Render(shorten(clean(m.tabErr[m.tab], false), max(10, m.width-2))) + "\n"
+	case m.screen == screenList && m.menu == nil && m.opening == "":
+		return m.about() + "\n"
 	}
 	return "\n"
 }
 
-// tabLabels are the tabs as drawn, so clicks can be measured against them.
-func (m model) tabLabels() []string {
-	repo := "This repo"
-	if m.repo != nil {
-		repo = m.repo.Name
+// about is the selected PR's labels, with the branch it's to be merged into
+// on the right, for the status line: selecting a row doesn't change its
+// height.
+func (m model) about() string {
+	r := m.selected()
+	if r == nil {
+		return ""
 	}
-	names := []string{"Mine", "Review requested", repo}
-	out := make([]string, len(names))
-	for i, n := range names {
-		if m.loaded[tab(i)] && (tab(i) != tabRepo || m.repo != nil) {
-			n += fmt.Sprintf(" %d", len(m.prs[tab(i)]))
-			if m.paging[tab(i)] {
-				n += "+"
-			}
-		}
-		out[i] = " " + n + " "
+	var labels []string
+	for _, l := range r.pr.Labels.Nodes {
+		labels = append(labels, colored("●", "#"+l.Color)+" "+styleDim.Render(l.Name))
 	}
-	return out
+	right := ""
+	if r.pr.BaseRefName != "" {
+		right = styleDim.Render("into ") + styleBranch.Render(shorten(r.pr.BaseRefName, 30))
+	}
+	left := shorten(strings.Join(labels, "  "), max(1, m.width-lipgloss.Width(right)-4))
+	return " " + left + strings.Repeat(" ", max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right)-2)) + right
 }
 
+// viewTabs is the tab bar, with where you are on a PR's screen, and on the
+// right what's going on behind it.
 func (m model) viewTabs() string {
-	var parts []string
-	for i, l := range m.tabLabels() {
-		if tab(i) == m.tab && m.screen == screenList {
-			parts = append(parts, styleTabOn.Render(l))
-		} else {
-			parts = append(parts, styleDim.Render(l))
-		}
-	}
-	line := strings.Join(parts, " ")
+	line, _ := m.tabBar()
 	if m.screen != screenList && m.cur != nil {
 		line += styleDim.Render(" › ") + styleHeader.Render(fmt.Sprintf("%s#%d", m.cur.Repository.NameWithOwner, m.cur.Number))
 	}
@@ -1060,28 +1085,23 @@ func (m model) viewTabs() string {
 	for t := range m.stale {
 		updating = updating || m.stale[t] || m.paging[t]
 	}
+	tag := ""
 	if updating && m.mode != modeBusy {
-		tag := styleDim.Render(m.spin.View() + " updating ")
-		if pad := m.width - lipgloss.Width(line) - lipgloss.Width(tag); pad > 1 {
-			line += strings.Repeat(" ", pad) + tag
-		}
+		tag = m.spin.View() + styleDim.Render(" updating ")
 	} else if m.demo {
-		tag := styleDim.Render("demo ")
-		if pad := m.width - lipgloss.Width(line) - lipgloss.Width(tag); pad > 1 {
-			line += strings.Repeat(" ", pad) + tag
-		}
+		tag = styleDim.Render("demo ")
 	}
-	return line
+	if pad := m.width - lipgloss.Width(line) - lipgloss.Width(tag); tag != "" && pad > 1 {
+		line += strings.Repeat(" ", pad) + tag
+	}
+	return ansi.Truncate(line, m.width, "") // narrower than the tabs at their shortest
 }
 
-func (m model) viewRow(r row, selected bool) string {
+// viewRow is a row's lines: a PR's title, what there is to say of it under
+// that, and a blank after.
+func (m model) viewRow(r row, selected bool) []string {
 	w := m.width
-	if r.spacer {
-		return ""
-	}
-	if r.header != "" {
-		return styleDim.Render("  " + r.header)
-	}
+	var lines []string
 	if r.repo {
 		left := " " + styleTree.Render("⇄") + " "
 		name := "Pick a repo"
@@ -1093,70 +1113,128 @@ func (m model) viewRow(r row, selected bool) string {
 			left += styleHeader.Render(name)
 			name = ""
 		}
-		hint := "change repo ›  "
+		hint := "change repo ›"
 		if m.repo == nil {
-			hint = "›  "
+			hint = "›"
 		}
-		return m.fitRow(left, name, styleDim.Render(hint), w, selected)
+		lines = []string{fitRow(left, name, styleDim.Render(hint), w)}
+	} else {
+		left := m.rowLeft(r.pr)
+		lines = []string{fitRow(left, r.pr.Title, styleDim.Render(strings.Join(m.rowMeta(*r.pr), " · ")), w)}
+		if info, _, _ := m.detailLine(r.pr, selected && m.pointerOnAgent(r.pr)); len(info) > 0 {
+			indent := strings.Repeat(" ", lipgloss.Width(left))
+			lines = append(lines, indent+shortenStyled(strings.Join(info, styleDim.Render(" · ")), max(1, w-lipgloss.Width(left)-1)))
+		}
 	}
-	hot := selected && m.pointerOnAgent(r.pr)
-	left, right, _ := m.rowParts(r.pr, hot)
-	return m.fitRow(left, r.pr.Title, right, w, selected)
+	if selected {
+		for i, l := range lines {
+			lines[i] = highlight(l, w)
+		}
+	}
+	return append(lines, "")
 }
 
-// rowParts are the two ends of a PR's row: what's left of its title, and the
-// meta right of it, which starts with its agent, agentW cells wide.
-func (m model) rowParts(pr *pullRequest, hot bool) (left, right string, agentW int) {
-	// The number wears the PR's colour (prNumber), like its mark: they read as
-	// one. Padded after, so the titles line up.
-	left = " " + prIcon(*pr) + " " + prNumber(pr.Number, pr.State, pr.IsDraft) + strings.Repeat(" ", m.numWidth()-len(strconv.Itoa(pr.Number))) + " "
+// rowLeft is what's left of a PR's title: its mark and its number, which
+// wears the PR's colour like the mark (they read as one). Padded after, so
+// the titles line up.
+func (m model) rowLeft(pr *pullRequest) string {
+	return " " + prIcon(*pr) + " " + prNumber(pr.Number, pr.State, pr.IsDraft) + strings.Repeat(" ", m.numWidth()-len(strconv.Itoa(pr.Number))) + " "
+}
 
+// rowMeta is what's right of a PR's title, read last: whose it is, where,
+// and when it last changed. Each only where the tab doesn't already say.
+func (m model) rowMeta(pr pullRequest) []string {
 	var meta []string
-	if a := m.rowAgent(*pr, hot); a != "" {
-		meta, agentW = append(meta, a), lipgloss.Width(a)
-	}
 	if m.tab != tabMine {
-		meta = append(meta, styleDim.Render(pr.author()))
+		meta = append(meta, shorten(pr.author(), 20))
 	}
-	switch {
-	case pr.Mergeable == "CONFLICTING":
-		meta = append(meta, styleErr.Render("conflicts"))
-	case pr.ReviewDecision == "CHANGES_REQUESTED":
-		meta = append(meta, styleErr.Render("changes"))
-	case pr.ReviewDecision == "APPROVED":
-		meta = append(meta, styleOK.Render("approved"))
+	if m.tab != tabRepo {
+		meta = append(meta, shorten(m.repoName(pr), 30))
 	}
-	if pr.AutoMergeRequest != nil {
-		meta = append(meta, styleTree.Render("auto"))
+	if a := age(pr.UpdatedAt); a != "" {
+		meta = append(meta, a)
+	}
+	return meta
+}
+
+// repoName is a PR's repo as its row names it: by its name alone, unless
+// the tab lists another repo of that name (a fork's, another host's).
+func (m model) repoName(pr pullRequest) string {
+	r := pr.repo()
+	for _, other := range m.prs[m.tab] {
+		if o := other.repo(); o.Name == r.Name && !o.same(r) {
+			if pr.Host != "github.com" && pr.Host != "" {
+				return pr.Host + "/" + pr.Repository.NameWithOwner
+			}
+			return pr.Repository.NameWithOwner
+		}
+	}
+	return r.Name
+}
+
+// detailLine is the line under a PR's title, each piece in its own colour:
+// its branch, its size, its review, its checks, auto-merge, its worktree and
+// last its agent, with the cells the agent is on (a click there goes to it).
+// hot: the pointer is on the agent.
+func (m model) detailLine(pr *pullRequest, hot bool) (info []string, from, to int) {
+	if pr.HeadRefName != "" {
+		// No branch glyph: ⎇ isn't in common monospace fonts. First, in its
+		// own colour, it reads as the branch anyway.
+		info = append(info, styleBranch.Render(shorten(pr.HeadRefName, 32)))
+	}
+	if pr.Additions > 0 || pr.Deletions > 0 {
+		info = append(info, styleOK.Render("+"+strconv.Itoa(pr.Additions))+" "+styleErr.Render("−"+strconv.Itoa(pr.Deletions)))
+	}
+	if pr.Mergeable == "CONFLICTING" {
+		info = append(info, styleErr.Render("conflicts"))
+	}
+	switch pr.ReviewDecision {
+	case "CHANGES_REQUESTED":
+		info = append(info, styleErr.Render("changes requested"))
+	case "APPROVED":
+		info = append(info, styleOK.Render("approved"))
 	}
 	if c := checksBadge(pr.checks()); c != "" {
-		meta = append(meta, c)
+		info = append(info, c)
 	}
-	right = strings.Join(meta, styleDim.Render(" · "))
+	if pr.AutoMergeRequest != nil {
+		info = append(info, styleTree.Render("auto-merge"))
+	}
 	if m.worktrees[pr.key()] {
-		right += " " + styleTree.Render("⌥")
-	} else {
-		right += "  "
+		info = append(info, styleTree.Render("worktree"))
 	}
-	return left, right, agentW
+	if a := m.rowAgent(*pr, hot); a != "" {
+		from = lipgloss.Width(m.rowLeft(pr))
+		for _, piece := range info {
+			from += lipgloss.Width(piece) + 3
+		}
+		// Only as much of it as the popup is wide enough to show.
+		if to = min(from+lipgloss.Width(a), m.width-1); to <= from {
+			from, to = 0, 0
+		}
+		info = append(info, a)
+	}
+	return info, from, to
 }
 
-// agentSpan is where on its row a PR's agent is drawn, as fitRow lays the
-// row out: the columns a click on goes to the agent rather than the PR.
+// detailed is whether detailLine has anything to say, cheaply.
+func (m model) detailed(pr pullRequest) bool {
+	return pr.HeadRefName != "" || pr.Additions > 0 || pr.Deletions > 0 || pr.Mergeable == "CONFLICTING" ||
+		pr.ReviewDecision == "CHANGES_REQUESTED" || pr.ReviewDecision == "APPROVED" ||
+		checkGlyph(pr.checks()) != "" || pr.AutoMergeRequest != nil || m.worktrees[pr.key()] || len(m.agentsOf(pr)) > 0
+}
+
+// agentSpan is where under its title a PR's agent is drawn: the columns a
+// click on goes to the agent rather than the PR.
 func (m model) agentSpan(pr *pullRequest) (from, to int, ok bool) {
-	left, right, agentW := m.rowParts(pr, false)
-	lw, rw := lipgloss.Width(left), lipgloss.Width(right)
-	if agentW == 0 || m.width-lw-rw-2 < 8 { // no agent, or no room for the meta
-		return 0, 0, false
-	}
-	from = m.width - 1 - rw
-	return from, from + agentW, true
+	_, from, to = m.detailLine(pr, false)
+	return from, to, to > from
 }
 
 // pointerOnAgent says whether the mouse is over pr's agent in the list.
 func (m model) pointerOnAgent(pr *pullRequest) bool {
-	i, ok := m.rowAt(m.mouseY)
-	if !ok || m.rows()[i].pr != pr {
+	i, line, ok := m.rowLineAt(m.mouseY)
+	if !ok || line != 1 || m.rows()[i].pr != pr {
 		return false
 	}
 	from, to, ok := m.agentSpan(pr)
@@ -1174,7 +1252,7 @@ func (m model) numWidth() int {
 
 // fitRow lays out left + title + right-aligned meta in exactly w cells,
 // truncating the title (never the number) when space runs out.
-func (m model) fitRow(left, title, right string, w int, selected bool) string {
+func fitRow(left, title, right string, w int) string {
 	lw, rw := lipgloss.Width(left), lipgloss.Width(right)
 	room := w - lw - rw - 2
 	if room < 8 {
@@ -1183,15 +1261,43 @@ func (m model) fitRow(left, title, right string, w int, selected bool) string {
 	}
 	title = shorten(title, max(1, room))
 	pad := max(1, w-lw-lipgloss.Width(title)-rw-1)
-	line := left + styleLead.Render(title) + strings.Repeat(" ", pad) + right
-	if selected {
-		return highlight(line, w)
-	}
-	return line
+	return left + styleLead.Render(title) + strings.Repeat(" ", pad) + right
 }
 
-// highlight gives a whole row the selection background, w cells wide. The
-// row's own coloured pieces each end in a style reset, which would also end
+// shortenStyled is shorten for text that's already coloured.
+func shortenStyled(s string, n int) string {
+	if lipgloss.Width(s) <= n {
+		return s
+	}
+	return ansi.Truncate(s, max(0, n-1), "") + styleDim.Render("…")
+}
+
+// age is how long ago t was, as briefly as a row's edge wants it: "now",
+// "4m", "2h", "3d", "5w", "7mo", "2y".
+func age(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := nowFn().Sub(t)
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 14*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d < 9*7*24*time.Hour:
+		return fmt.Sprintf("%dw", int(d.Hours()/24/7))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo", int(d.Hours()/24/30))
+	}
+	return fmt.Sprintf("%dy", int(d.Hours()/24/365))
+}
+
+// highlight gives a whole line the selection background, w cells wide. The
+// line's own coloured pieces each end in a style reset, which would also end
 // the background, so it's switched back on after every one.
 func highlight(line string, w int) string {
 	on := styleSelected.Render("x")
@@ -1220,7 +1326,12 @@ func (m model) currentFooter() []hint {
 	if m.tab == tabRepo {
 		hs = append(hs, hint{"^t repo", "ctrl+t", hintView})
 	}
-	return append(hs, hint{"^r refresh", "ctrl+r", hintView}, hint{"tab switch", "tab", hintView}, hint{m.escLabel(), "esc", hintQuiet})
+	// The tabs' keys are in the filter's placeholder. esc says what it'll do.
+	esc := m.escLabel()
+	if m.filter.Value() != "" {
+		esc = "esc clear"
+	}
+	return append(hs, hint{"^r refresh", "ctrl+r", hintView}, hint{esc, "esc", hintQuiet})
 }
 
 // ── menus ─────────────────────────────────────────────────────────────────────

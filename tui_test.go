@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func plain(m model) string { return stripStyles(m.View()) }
@@ -15,22 +16,36 @@ func plain(m model) string { return stripStyles(m.View()) }
 func TestTabsListAndGroup(t *testing.T) {
 	m := demoModel(t, tabMine)
 	v := plain(m)
-	for _, want := range []string{"Mine 4", "halcyon/notes-app", "halcyon/sync-server", "#482", "Offline edits", "approved", "⌥"} {
+	for _, want := range []string{"GitHub", "Mine 4", "notes-app · 30m", "sync-server · 5h", "#482", "Offline edits",
+		"sam/offline-conflicts · +318 −74 · approved · ✓ checks · worktree", "✗ checks", "changes requested"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("mine tab lacks %q:\n%s", want, v)
 		}
 	}
+	// Grouped by whose move it is, yours first, each heading with its count.
+	last := -1
+	for _, heading := range []string{"Needs fixing 2", "Ready to merge 1", "Drafts 1"} {
+		at := strings.Index(v, heading)
+		if at < last || at < 0 {
+			t.Fatalf("%q missing or out of order:\n%s", heading, v)
+		}
+		last = at
+	}
+	if strings.Index(v, "#479") > strings.Index(v, "#482") || strings.Index(v, "#482") > strings.Index(v, "#476") {
+		t.Fatalf("not in the groups' order:\n%s", v)
+	}
 	m = press(m, "tab")
-	if m.tab != tabReview || !strings.Contains(plain(m), "Fix typo in onboarding") || !strings.Contains(plain(m), "maria-k") {
-		t.Fatalf("review tab:\n%s", plain(m))
+	if v = plain(m); m.tab != tabReview || !strings.Contains(v, "Fix typo in onboarding") || !strings.Contains(v, "maria-k · notes-app") ||
+		!strings.Contains(v, "To review 2") || strings.Index(v, "To review") > strings.Index(v, "Needs fixing") {
+		t.Fatalf("review tab:\n%s", v)
 	}
 	m = press(m, "tab")
 	v = plain(m)
-	if m.tab != tabRepo || !strings.Contains(v, "Drafts") || !strings.Contains(v, "jonas") || !strings.Contains(v, "auto") {
+	if m.tab != tabRepo || !strings.Contains(v, "Waiting 2") || !strings.Contains(v, "jonas") || !strings.Contains(v, "auto-merge") {
 		t.Fatalf("repo tab:\n%s", v)
 	}
-	// Drafts come after the ready ones.
-	if strings.Index(v, "Spike: CRDT") < strings.Index(v, "Faster cold start") {
+	// Drafts come after the ready ones (scrolled to, here: they're last).
+	if rows := m.rows(); !rows[len(rows)-1].pr.IsDraft || rows[1].pr.IsDraft {
 		t.Fatalf("drafts not last:\n%s", v)
 	}
 	if m = press(m, "tab"); m.tab != tabMine {
@@ -44,7 +59,7 @@ func TestFilterMatchesNumberRepoAndLabel(t *testing.T) {
 		m = press(m, string(r))
 	}
 	rows := m.rows()
-	if len(rows) != 2 || rows[1].pr.Number != 482 {
+	if len(rows) != 1 || rows[0].pr.Number != 482 {
 		t.Fatalf("filter 'sync bug': %+v", rows)
 	}
 	m = press(m, "esc")
@@ -61,21 +76,155 @@ func TestFilterMatchesNumberRepoAndLabel(t *testing.T) {
 
 func TestCursorSkipsHeadings(t *testing.T) {
 	m := demoModel(t, tabMine)
-	if r := m.selected(); r == nil || r.pr.Number != 482 {
+	if r := m.selected(); r == nil || r.pr.Number != 118 {
 		t.Fatal("cursor should start on the first PR, not its heading")
 	}
-	m = press(m, "down", "down", "down")
-	if r := m.selected(); r == nil || r.pr.Number != 118 {
+	m = press(m, "down", "down")
+	if r := m.selected(); r == nil || r.pr.Number != 482 {
 		t.Fatalf("down past a heading: %+v", m.selected())
 	}
 	m = press(m, "up")
-	if r := m.selected(); r == nil || r.pr.Number != 476 {
+	if r := m.selected(); r == nil || r.pr.Number != 479 {
 		t.Fatalf("up past a heading: %+v", m.selected())
+	}
+	if m = press(m, "down", "down", "down", "down"); m.selected().pr.Number != 476 {
+		t.Fatalf("down at the end: %+v", m.selected())
+	}
+}
+
+func TestGroupsAreWhoseMoveItIs(t *testing.T) {
+	pr := func(decision, checks, mergeable string, draft bool) pullRequest {
+		p := pullRequest{State: "OPEN", ReviewDecision: decision, Mergeable: mergeable, IsDraft: draft}
+		if checks != "" {
+			p.Commits = rollupOf([]check{{Typename: "StatusContext", State: checks}})
+		}
+		return p
+	}
+	for _, c := range []struct {
+		pr   pullRequest
+		tab  tab
+		want group
+	}{
+		{pr("APPROVED", "SUCCESS", "MERGEABLE", false), tabMine, groupReady},
+		{pr("", "SUCCESS", "", false), tabMine, groupReady}, // no review asked of it
+		{pr("", "", "", false), tabMine, groupWaiting},      // nothing says it's ready
+		{pr("APPROVED", "PENDING", "", false), tabMine, groupWaiting},
+		{pr("REVIEW_REQUIRED", "SUCCESS", "", false), tabMine, groupWaiting},
+		{pr("APPROVED", "FAILURE", "", false), tabMine, groupFixing},
+		{pr("APPROVED", "SUCCESS", "CONFLICTING", false), tabRepo, groupFixing},
+		{pr("CHANGES_REQUESTED", "SUCCESS", "", false), tabMine, groupFixing},
+		{pr("", "FAILURE", "", true), tabMine, groupDrafts}, // a draft isn't out yet
+		{pr("REVIEW_REQUIRED", "PENDING", "", false), tabReview, groupReview},
+		{pr("REVIEW_REQUIRED", "FAILURE", "", false), tabReview, groupFixing}, // its author's move
+	} {
+		if got := groupOf(c.pr, c.tab); got != c.want {
+			t.Errorf("%s/%s/%s draft=%v in tab %d: %q, want %q", c.pr.ReviewDecision, c.pr.checks(), c.pr.Mergeable, c.pr.IsDraft, c.tab, got.label(), c.want.label())
+		}
+	}
+	// A PR that changes group is listed in its new one, and still selected
+	// when you come back from its screen.
+	m := press(onPR(t, demoModel(t, tabMine), 482), "enter")
+	changed := *m.cur
+	changed.ReviewDecision = "CHANGES_REQUESTED"
+	m.replaceRow(changed)
+	if m = press(m, "esc"); m.selected().pr.Number != 482 || !strings.Contains(plain(m), "Needs fixing 3") || strings.Contains(plain(m), "Ready to merge") {
+		t.Fatalf("on #%d:\n%s", m.selected().pr.Number, plain(m))
+	}
+}
+
+// The first line names the popup and the tabs; too narrow for that, the name
+// goes, then the labels shorten, and a click still lands on the tab drawn.
+func TestTabBarFitsTheWidth(t *testing.T) {
+	for width := 70; width >= 26; width-- {
+		m := demoModel(t, tabReview)
+		m.width = width
+		line, cells := m.tabBar()
+		bar := stripStyles(line)
+		// At their shortest the tabs are 31 cells; under that the line is cut.
+		if got := ansi.StringWidth(bar); got > max(width, 31) || ansi.StringWidth(strings.Split(plain(m), "\n")[0]) > width {
+			t.Fatalf("at %d cells the tabs are %d wide: %q", width, got, bar)
+		}
+		for _, c := range cells {
+			if got := strings.Fields(bar[c.x0:c.x1])[0]; got != strings.Fields(m.tabName(c.tab, false))[0] && got != m.tabName(c.tab, true) {
+				t.Fatalf("at %d cells tab %d is drawn as %q", width, c.tab, bar[c.x0:c.x1])
+			}
+			next, cmd := m.Update(tea.MouseMsg{X: c.x0 + 1, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+			if got := drive(next.(model), cmd); got.tab != c.tab && c.tab != tabReview {
+				t.Fatalf("at %d cells a click on tab %d went to %d", width, c.tab, got.tab)
+			}
+		}
+	}
+	wide := plain(demoModel(t, tabMine))
+	if !strings.HasPrefix(wide, " GitHub   Mine 4  Review requested 3  notes-app 7 ") {
+		t.Fatalf("with room for it all:\n%s", wide)
+	}
+}
+
+// The line above the keys is about the selected PR; the keys say what esc
+// will do, and leave the tabs' keys to the filter's placeholder.
+func TestStatusLineAndKeysFollowTheSelection(t *testing.T) {
+	m := onPR(t, demoModel(t, tabMine), 482)
+	lines := strings.Split(plain(m), "\n")
+	about, keys := lines[len(lines)-2], lines[len(lines)-1]
+	if !strings.Contains(about, "● sync  ● bug") || !strings.HasSuffix(strings.TrimRight(about, " "), "into main") {
+		t.Fatalf("status line: %q", about)
+	}
+	if !strings.Contains(keys, "esc close") || strings.Contains(keys, "tab") || !strings.Contains(plain(m), "Type to filter… ← → to change tabs") {
+		t.Fatalf("keys %q:\n%s", keys, plain(m))
+	}
+	m = press(m, "s", "y")
+	if v := plain(m); !strings.Contains(v, "esc clear") || strings.Contains(v, "esc close") {
+		t.Fatalf("esc doesn't say it clears the filter:\n%s", v)
+	}
+	// An error still takes the line.
+	m.err = "it broke"
+	if v := plain(m); !strings.Contains(v, "it broke") || strings.Contains(v, "into main") {
+		t.Fatalf("an error isn't shown over it:\n%s", v)
+	}
+}
+
+// What's drawn is what the scrolling and the mouse count: every row's lines,
+// and the line each is found on, in every tab and at sizes that scroll.
+func TestRowsAreCountedAsDrawn(t *testing.T) {
+	for _, tb := range []tab{tabMine, tabReview, tabRepo} {
+		for _, height := range []int{34, 16, 11} {
+			sized, _ := demoModel(t, tb).Update(tea.WindowSizeMsg{Width: 110, Height: height})
+			m := sized.(model)
+			for step := 0; step < len(m.rows()); step++ {
+				rows, screen := m.rows(), strings.Split(plain(m), "\n")
+				for i, r := range rows {
+					if got := len(m.viewRow(r, false)); got != m.rowHeight(r) {
+						t.Fatalf("row %d is %d lines, counted as %d", i, got, m.rowHeight(r))
+					}
+				}
+				// The selected row is all on screen, and found where it's drawn.
+				pr := rows[m.cursor].pr
+				if pr == nil {
+					m = press(m, "down")
+					continue
+				}
+				y := lineOf(t, m, pr.Title)
+				if i, line, ok := m.rowLineAt(y); !ok || i != m.cursor || line != 0 {
+					t.Fatalf("tab %d height %d: #%d drawn on line %d, found as row %d line %d (%v)", tb, height, pr.Number, y, i, line, ok)
+				}
+				if i, line, ok := m.rowLineAt(y + 1); !ok || i != m.cursor || line != 1 || !strings.Contains(screen[y+1], pr.HeadRefName) {
+					t.Fatalf("tab %d height %d: #%d's details aren't under its title:\n%s", tb, height, pr.Number, plain(m))
+				}
+				// Whatever's at the top, its group is said above it.
+				if top := rows[m.offset]; top.pr != nil && !strings.Contains(screen[listTop], groupOf(*top.pr, tb).label()) {
+					t.Fatalf("tab %d height %d: no heading at the top:\n%s", tb, height, plain(m))
+				}
+				if len(screen) != height {
+					t.Fatalf("tab %d: %d lines drawn in a popup of %d", tb, len(screen), height)
+				}
+				m = press(m, "down")
+			}
+		}
 	}
 }
 
 func TestPRScreenShowsReadinessThreadsAndConversation(t *testing.T) {
-	m := press(demoModel(t, tabMine), "enter")
+	m := press(onPR(t, demoModel(t, tabMine), 482), "enter")
 	if m.screen != screenPR || m.curDetail == nil {
 		t.Fatal("enter should open the PR screen with its detail")
 	}
@@ -137,7 +286,7 @@ func TestReadinessReasons(t *testing.T) {
 }
 
 func TestDraftToggle(t *testing.T) {
-	m := press(demoModel(t, tabMine), "enter") // #482, ready
+	m := press(onPR(t, demoModel(t, tabMine), 482), "enter") // #482, ready
 	m = press(m, "d")
 	if !m.cur.IsDraft || !strings.Contains(m.flash, "draft again") {
 		t.Fatalf("d should convert to draft: draft=%v flash=%q err=%q", m.cur.IsDraft, m.flash, m.err)
@@ -156,7 +305,7 @@ func TestDraftToggle(t *testing.T) {
 }
 
 func TestMergeAsksThenOffersCleanup(t *testing.T) {
-	m := press(demoModel(t, tabMine), "enter") // #482: clean, has a worktree
+	m := press(onPR(t, demoModel(t, tabMine), 482), "enter") // #482: clean, has a worktree
 	m = press(m, "m")
 	if m.menu == nil || m.menu.items[0].label != "Squash and merge" {
 		t.Fatalf("merge menu should lead with the repo's default method: %+v", m.menu)
@@ -199,7 +348,7 @@ func TestMergeAsksThenOffersCleanup(t *testing.T) {
 }
 
 func TestMergeCancelDoesNothing(t *testing.T) {
-	m := press(demoModel(t, tabMine), "enter")
+	m := press(onPR(t, demoModel(t, tabMine), 482), "enter")
 	m = press(m, "m", "2", "down", "enter") // merge commit, then Cancel
 	if m.cur.State != "OPEN" || m.menu != nil {
 		t.Fatalf("cancel merged anyway: %q", m.cur.State)
@@ -211,7 +360,7 @@ func TestMergeCancelDoesNothing(t *testing.T) {
 }
 
 func TestBlockedPROffersAutoMerge(t *testing.T) {
-	m := press(demoModel(t, tabMine), "down", "enter") // #479: required check failing
+	m := press(onPR(t, demoModel(t, tabMine), 479), "enter") // #479: required check failing
 	m = press(m, "m")
 	if m.menu == nil || !strings.HasPrefix(m.menu.items[0].label, "Auto-merge when ready") {
 		t.Fatalf("blocked PR should offer auto-merge: %+v", m.menu)
@@ -234,7 +383,7 @@ func TestBlockedPROffersAutoMerge(t *testing.T) {
 }
 
 func TestConflictingPRCantMerge(t *testing.T) {
-	m := press(demoModel(t, tabReview), "enter") // #64: conflicts
+	m := press(onPR(t, demoModel(t, tabReview), 64), "enter") // #64: conflicts
 	m = press(m, "m")
 	if m.menu != nil || !strings.Contains(m.err, "Conflicts") {
 		t.Fatalf("conflicting PR: menu=%v err=%q", m.menu, m.err)
@@ -242,7 +391,7 @@ func TestConflictingPRCantMerge(t *testing.T) {
 }
 
 func TestDemoWorktreeSaysWhatItWouldDo(t *testing.T) {
-	m := press(demoModel(t, tabReview), "down", "down", "enter") // #480 from maria-k's fork
+	m := press(onPR(t, demoModel(t, tabReview), 480), "enter") // #480 from maria-k's fork
 	if m.cur.Number != 480 {
 		t.Fatalf("on #%d", m.cur.Number)
 	}
@@ -312,20 +461,26 @@ func TestStaleReplyIsDropped(t *testing.T) {
 
 func TestMouseHoverClickAndTabs(t *testing.T) {
 	m := demoModel(t, tabMine)
-	// Hover the second PR (line listTop+2: heading, #482, #479).
-	next, _ := m.Update(tea.MouseMsg{X: 10, Y: listTop + 2, Action: tea.MouseActionMotion})
+	// Hover the second PR, on the line under its title.
+	y := lineOf(t, m, "#479") + 1
+	next, _ := m.Update(tea.MouseMsg{X: 10, Y: y, Action: tea.MouseActionMotion})
 	m = next.(model)
 	if r := m.selected(); r == nil || r.pr.Number != 479 {
 		t.Fatalf("hover: %+v", m.selected())
 	}
-	next, cmd := m.Update(tea.MouseMsg{X: 10, Y: listTop + 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	// Headings and the blanks between rows aren't anything to click.
+	for _, off := range []int{lineOf(t, m, "Needs fixing"), lineOf(t, m, "#479") + 2} {
+		if _, ok := m.rowAt(off); ok {
+			t.Fatalf("line %d is taken for a row", off)
+		}
+	}
+	next, cmd := m.Update(tea.MouseMsg{X: 10, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = drive(next.(model), cmd)
 	if m.screen != screenPR || m.cur.Number != 479 {
 		t.Fatal("click should open the PR")
 	}
 	// The tabs take you home: click "Review requested".
-	x := len(m.tabLabels()[0]) + 3
-	next, cmd = m.Update(tea.MouseMsg{X: x, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	next, cmd = m.Update(tea.MouseMsg{X: tabX(m, tabReview), Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = drive(next.(model), cmd)
 	if m.screen != screenList || m.tab != tabReview {
 		t.Fatalf("tab click: screen %v tab %v", m.screen, m.tab)
@@ -333,7 +488,7 @@ func TestMouseHoverClickAndTabs(t *testing.T) {
 }
 
 func TestMouseChoosesMenuItems(t *testing.T) {
-	m := press(demoModel(t, tabMine), "enter", "m")
+	m := press(onPR(t, demoModel(t, tabMine), 482), "enter", "m")
 	header := m.prHeader()
 	top := 2 + strings.Count(header, "\n") + menuTop
 	click := func(m model, y int) model {
@@ -350,7 +505,7 @@ func TestMouseChoosesMenuItems(t *testing.T) {
 		t.Fatalf("clicking the second method should ask to confirm a merge commit: %+v", m.menu)
 	}
 	// Double-clicking the first method never reaches "yes".
-	m = press(demoModel(t, tabMine), "enter", "m")
+	m = press(onPR(t, demoModel(t, tabMine), 482), "enter", "m")
 	m.menuOpened = time.Now().Add(-time.Second)
 	m = click(click(m, top), top)
 	if m.cur.State != "OPEN" {
@@ -359,7 +514,7 @@ func TestMouseChoosesMenuItems(t *testing.T) {
 }
 
 func TestFooterHintsAreButtons(t *testing.T) {
-	m := press(demoModel(t, tabMine), "enter")
+	m := press(onPR(t, demoModel(t, tabMine), 482), "enter")
 	hs := m.detailFooter()
 	x := 1
 	for _, h := range hs {
@@ -409,7 +564,7 @@ func TestDemoTouchesNothing(t *testing.T) {
 	old := herdrCallFn
 	herdrCallFn = func(string, any, any) error { calls++; return errors.New("no") }
 	defer func() { herdrCallFn = old }()
-	m := press(demoModel(t, tabMine), "enter", "w", "s", "d", "d", "m", "enter", "up", "enter", "enter")
+	m := press(onPR(t, demoModel(t, tabMine), 482), "enter", "w", "s", "d", "d", "m", "enter", "up", "enter", "enter")
 	if calls != 0 || m.err != "" {
 		t.Fatalf("demo called herdr %d times (err %q)", calls, m.err)
 	}
@@ -534,9 +689,7 @@ func TestRepoPickerTakesATypedRepo(t *testing.T) {
 
 func TestClickingTheRepoTabYoureOnPicksARepo(t *testing.T) {
 	m := demoModel(t, tabRepo)
-	labels := m.tabLabels()
-	x := len([]rune(labels[0])) + 1 + len([]rune(labels[1])) + 1 + 2
-	next, cmd := m.Update(tea.MouseMsg{X: x, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	next, cmd := m.Update(tea.MouseMsg{X: tabX(m, tabRepo), Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	m = drive(next.(model), cmd)
 	if m.menu == nil || !m.menu.filterable {
 		t.Fatal("clicking the active repo tab should open the picker")
@@ -550,7 +703,7 @@ func TestRepoTabHasAChangeRepoRow(t *testing.T) {
 		t.Fatalf("no change-repo row:\n%s", v)
 	}
 	// The cursor starts on the first PR, not the row above.
-	if r := m.selected(); r == nil || r.pr.Number != 482 {
+	if r := m.selected(); r == nil || r.pr.Number != 479 {
 		t.Fatalf("cursor on %+v", m.selected())
 	}
 	// ↑ reaches it; enter opens the picker in the tab.

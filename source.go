@@ -143,17 +143,13 @@ func (s *githubSource) list(ctx context.Context, t tab, cursor string) (page, er
 	return out, nil
 }
 
-// sortPRs orders a tab: grouped by repo (Mine, Review) or drafts last (Repo),
-// most recently updated first within a group.
+// sortPRs orders a tab: by group (groupOf: whose move it is, yours first),
+// and within one, newest first.
 func sortPRs(prs []pullRequest, t tab) {
 	sort.SliceStable(prs, func(i, j int) bool {
 		a, b := prs[i], prs[j]
-		if t == tabRepo {
-			if a.IsDraft != b.IsDraft {
-				return !a.IsDraft
-			}
-		} else if ka, kb := a.Host+"/"+a.Repository.NameWithOwner, b.Host+"/"+b.Repository.NameWithOwner; ka != kb {
-			return ka < kb
+		if ga, gb := groupOf(a, t), groupOf(b, t); ga != gb {
+			return ga < gb
 		}
 		return a.UpdatedAt.After(b.UpdatedAt)
 	})

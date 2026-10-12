@@ -39,9 +39,9 @@ func TestWriteDemoScreens(t *testing.T) {
 
 	save("mine", m)
 	save("review", press(m, "tab"))
-	pr := press(m, "enter") // #482: approved, clean, a thread and a conversation
+	pr := press(onPR(t, m, 482), "enter") // #482: approved, clean, a thread and a conversation
 	save("pr", pr)
 	save("merge", press(pr, "m"))
-	save("agents", press(pr, "a"))             // its two agents, to choose between
-	save("blocked", press(m, "down", "enter")) // #479: a required check failing
+	save("agents", press(pr, "a"))                   // its two agents, to choose between
+	save("blocked", press(onPR(t, m, 479), "enter")) // #479: a required check failing
 }

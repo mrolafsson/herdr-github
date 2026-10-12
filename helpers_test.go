@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +72,38 @@ func demoModel(t *testing.T, tb tab) model {
 	next, _ := m.Update(worktreesMsg{marks: d.worktreeMarks(), gen: m.gen})
 	next, _ = next.(model).Update(agentsMsg(d.agents()))
 	return next.(model)
+}
+
+// onPR puts the cursor on pull request number n, wherever its group lists it.
+func onPR(t *testing.T, m model, n int) model {
+	t.Helper()
+	for i, r := range m.rows() {
+		if r.pr != nil && r.pr.Number == n {
+			m.cursor = i
+			m.scrollTo()
+			return m
+		}
+	}
+	t.Fatalf("#%d isn't listed", n)
+	return m
+}
+
+// lineOf is the screen line that says text, as the popup draws it now.
+func lineOf(t *testing.T, m model, text string) int {
+	t.Helper()
+	for y, l := range strings.Split(stripStyles(m.View()), "\n") {
+		if strings.Contains(l, text) {
+			return y
+		}
+	}
+	t.Fatalf("nothing on screen says %q:\n%s", text, stripStyles(m.View()))
+	return 0
+}
+
+// tabX is a column inside tab tb, to click it.
+func tabX(m model, tb tab) int {
+	_, cells := m.tabBar()
+	return cells[tb].x0 + 2
 }
 
 // press sends keys one by one, running whatever each one starts to the end.

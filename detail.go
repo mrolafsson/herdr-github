@@ -107,6 +107,7 @@ func (m *model) replaceRow(pr pullRequest) {
 				m.prs[t][i] = pr
 			}
 		}
+		sortPRs(m.prs[t], t) // it may be in another group now
 	}
 }
 
@@ -128,7 +129,8 @@ func (m model) handleDetailKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.leave() // opened on this PR: there's no list to go back to
 		}
 		m.screen, m.err, m.flash, m.curDetail, m.direct = screenList, "", "", nil, false
-		m.clampCursor()
+		m.chose = true
+		m.reselect(pr.key()) // wherever it's listed now
 	case "o":
 		m.openURL(pr.URL)
 	case "y":

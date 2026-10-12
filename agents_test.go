@@ -463,11 +463,11 @@ func TestAgentsOnThePRsBranch(t *testing.T) {
 }
 
 func TestPopupGoesToAPRsAgents(t *testing.T) {
-	m := demoModel(t, tabMine)
+	m := onPR(t, demoModel(t, tabMine), 482)
 	m.demo = false
 	// An agent's name finds its PR, though no word of it is in the PR.
 	f := press(m, "t", "h", "r", "e", "e", "-", "w", "a", "y")
-	if r := f.selected(); r == nil || r.pr.Number != 482 || len(f.rows()) != 2 {
+	if r := f.selected(); r == nil || r.pr.Number != 482 || len(f.rows()) != 1 {
 		t.Fatalf("filtering by agent: %+v", f.rows())
 	}
 	list, screen := ansi.Strip(m.View()), ansi.Strip(press(m, "enter").View())
@@ -525,15 +525,19 @@ func TestPopupGoesToAPRsAgents(t *testing.T) {
 	}
 	// In the list, a click on the agent goes to the agents; elsewhere on the
 	// row, to the PR.
-	from, to, ok := m.agentSpan(m.rows()[1].pr)
-	if !ok || to <= from {
-		t.Fatalf("no span for the row's agent: %d %d", from, to)
+	from, to, ok := m.agentSpan(m.selected().pr)
+	y := lineOf(t, m, "Offline sync conflicts +1")
+	if at := strings.Split(list, "\n")[y]; !ok || ansi.StringWidth(at[:strings.Index(at, "✓ Offline sync")]) != from || to-from != ansi.StringWidth("✓ Offline sync conflicts +1") {
+		t.Fatalf("the row's agent isn't where its span says: %d to %d in %q", from, to, at)
 	}
-	if next, _ := click(m, from, listTop+1); next.(model).menu == nil || next.(model).screen != screenList {
+	if next, _ := click(m, from, y); next.(model).menu == nil || next.(model).screen != screenList {
 		t.Fatal("a click on a row's agents didn't list them")
 	}
-	if next, _ := click(m, from-3, listTop+1); next.(model).screen != screenPR {
+	if next, _ := click(m, from-3, y); next.(model).screen != screenPR {
 		t.Fatal("a click beside the agent didn't open the PR")
+	}
+	if next, _ := click(m, from, y-1); next.(model).screen != screenPR {
+		t.Fatal("a click above the agent, on the title, didn't open the PR")
 	}
 
 	// A pane its agent has left is still gone to.
@@ -551,14 +555,14 @@ func TestPopupGoesToAPRsAgents(t *testing.T) {
 
 	// An agent with no pane can only be resumed: the command is copied.
 	t.Setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")
-	gone := press(m, "down", "down") // #476
+	gone := onPR(t, m, 476)
 	var after model
 	out := stdout(t, func() { after = press(gone, "ctrl+a") })
 	if !strings.Contains(out, "\x1b]52;c;") || !strings.Contains(after.flash, "resumes CRDT spike") {
 		t.Fatalf("out %q, flash %q, err %q", out, after.flash, after.err)
 	}
 	// And a PR no agent here has touched says so.
-	if none := press(m, "down", "ctrl+g"); !strings.Contains(none.err, "No agent here has worked on #479") {
+	if none := press(onPR(t, m, 479), "ctrl+g"); !strings.Contains(none.err, "No agent here has worked on #479") {
 		t.Fatalf("err %q", none.err)
 	}
 }
@@ -628,7 +632,7 @@ func TestPickerOpensStraightOnAnAgentsPR(t *testing.T) {
 	listed := m.View()
 	m.prs = map[tab][]pullRequest{}
 	next, cmd = m.openOn([]prRef{ref("notes-app", 482)})
-	if view := next.View(); !strings.Contains(view, "Opening #482") || strings.Contains(view, "halcyon/sync-server") || !strings.Contains(listed, "halcyon/sync-server") {
+	if view := next.View(); !strings.Contains(view, "Opening #482") || strings.Contains(view, "Return merge proposals") || !strings.Contains(listed, "Return merge proposals") {
 		t.Fatalf("the lists show on the way to the PR:\n%s", view)
 	}
 	if _, cmd := next.Update(keyMsg("esc")); !quits(cmd) {

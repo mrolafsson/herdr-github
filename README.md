@@ -10,9 +10,10 @@ opened it and any that worked on it since, a key or a click away.
 ![Your pull requests, on the built-in demo org](docs/images/mine.png)
 
 - **Three tabs**: *Mine* (your open PRs, every repo), *Review requested*,
-  and *this repo* (all open PRs in the repo you opened it from), each with
-  its state, checks (`✓ ✗ ●`), review decision, conflicts, auto-merge, and
-  `⌥` where a worktree already exists.
+  and *this repo* (all open PRs in the repo you opened it from), each
+  grouped by whose move it is: what needs fixing, what's ready to merge,
+  what's waiting, your drafts. Under a PR's title: its branch, its size,
+  its review, its checks, auto-merge, its worktree and its agents.
 - **PR screen**: merge readiness in one line (and why not), checks that need
   attention, reviewers, the description as Markdown, unresolved review
   threads, and the conversation.
@@ -148,17 +149,37 @@ bin/herdr-github picker --demo
 
 | tab                  | shows                                                         |
 |----------------------|---------------------------------------------------------------|
-| **Mine**             | your open PRs across every repo, grouped by repo              |
+| **Mine**             | your open PRs across every repo                               |
 | **Review requested** | open PRs asking for your review (or your team's)              |
-| **this repo**        | every open PR in the repo you opened the popup from, drafts last; **ctrl+t** picks another |
+| **this repo**        | every open PR in the repo you opened the popup from; **ctrl+t** picks another |
 
-Rows show the state (`●` open, `◌` draft), the number and title, then
-`conflicts` / `changes` / `approved`, `auto` if auto-merge is on, the checks
-(`✓` passed, `✗` failed, `●` running) and `⌥` if the worktree exists. A PR
-your agents have worked on names the first of them, and counts the rest:
-`✓ Offline sync conflicts +1`, the mark being the agent's state (see
-[A PR's agents](#a-prs-agents)). The
-popup reopens on the tab you left.
+Every tab is **grouped by whose move it is**, yours first, each group under
+a heading with its count, newest first within it:
+
+| group              | is                                                             |
+|--------------------|----------------------------------------------------------------|
+| **To review**      | (*Review requested* only) asked of you, and nothing wrong with it |
+| **Needs fixing**   | checks failed, in conflict, or changes requested               |
+| **Ready to merge** | approved; or no review asked of it and its checks passed       |
+| **Waiting**        | on its reviewers, or on checks still running                   |
+| **Drafts**         | not out for review yet, whatever its checks say                |
+
+A PR is two lines. The first has its state (`●` open, `◌` draft), number
+and title, and at the right edge whose it is, its repo and when it last
+changed (`priya · notes-app · 3h`), each only where the tab doesn't already
+say. Under it, each in its own colour:
+
+```
+sam/offline-conflicts · +318 −74 · approved · ✓ checks · worktree · ✓ Offline sync conflicts +1
+```
+
+its branch, lines added and removed, `conflicts`, `changes requested` or
+`approved`, its checks (`✓ checks` passed, `✗ checks` failed, `● checks`
+running), `auto-merge` if it's on, `worktree` if one exists, and last the
+first of the agents that worked on it, counting the rest, the mark being
+the agent's state (see [A PR's agents](#a-prs-agents)). The line above the
+keys has the selected PR's labels, and the branch it's to be merged into.
+The popup reopens on the tab you left.
 
 **Another repo.** The third tab starts on the repo of the space you opened
 the popup from, named on its first row: `⇄ owner/repo  change repo ›`.
@@ -198,7 +219,8 @@ as they arrive; long lists fill in page by page (`Mine 20+`).
 | ctrl+a             | go to its agent (a menu, if several)     |
 | ctrl+t             | pick the repo tab's repo                 |
 | ctrl+r             | refresh                                  |
-| tab, ← →           | switch tabs                              |
+| ← →, tab           | switch tabs (with text in the filter, ← → move within it) |
+| pgup pgdn          | a page up or down                        |
 | esc                | clear the filter, then close             |
 
 ### A pull request
@@ -403,8 +425,9 @@ track of every agent that has to do with an open PR:
 | **on its branch** | an agent, of any kind, in a space on the PR's branch |
 | **worked on it**  | another Claude Code session that looked at, pushed to or commented on it |
 
-- **In the popup**, a PR's row names its first agent and counts the rest
-  (`✓ Offline sync conflicts +1`), and the PR screen lists them, each with
+- **In the popup**, the line under a PR's title ends with its first agent
+  and counts the rest (`✓ Offline sync conflicts +1`), and the PR screen
+  lists them, each with
   its state. **ctrl+a** (**a** on the PR screen) goes to the agent's pane,
   asking which when there are several; so does a click on an agent. Typing
   an agent's name filters to its PRs.
@@ -635,7 +658,8 @@ with the invoking space's directory; the popup is the same binary running a
 | `worktree.go`  | PR worktrees (forks too), start, removal               |
 | `labels.go`    | the sidebar tokens (`tick`)                            |
 | `agents.go`    | each PR's agents, from Claude Code's transcripts and herdr's panes |
-| `tui.go`       | lists, tabs, filter, menus                             |
+| `tui.go`       | lists, rows, filter, menus                             |
+| `groups.go`    | the groups a list is in, their headings, the tab bar   |
 | `detail.go`    | the PR screen, draft, merge and clean-up               |
 | `repopicker.go` | the repo tab's repo picker                            |
 | `cache.go`, `prefs.go` | the lists from last time, remembered choices   |

@@ -335,7 +335,7 @@ func (m model) switchRepo(r repoRef) (tea.Model, tea.Cmd) {
 	}
 	m.prs[tabRepo], m.loaded[tabRepo], m.stale[tabRepo], m.paging[tabRepo], m.tabErr[tabRepo] = nil, false, false, false, ""
 	m.tab, m.screen, m.cur, m.curDetail = tabRepo, screenList, nil, nil
-	m.cursor, m.offset, m.mode = 0, 0, modeLoading
+	m.cursor, m.offset, m.chose, m.mode = 0, 0, false, modeLoading
 	m.picks++
 	if !m.demo {
 		rememberRecentRepo(r)

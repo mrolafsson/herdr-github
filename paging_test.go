@@ -149,6 +149,39 @@ func TestRepoListShowsCachedReposAtOnce(t *testing.T) {
 	}
 }
 
+// Opened on last time's list, the cursor is on the first PR; a fresher list
+// that puts another first leaves it on the first, until you've moved it.
+func TestCursorStaysOnTheFirstPRUntilYouMoveIt(t *testing.T) {
+	failing := prsNumbered(9)
+	failing[0].Commits = rollupOf([]check{{Typename: "StatusContext", State: "FAILURE"}})
+	fresh := append(prsNumbered(1, 2), failing...) // #9 needs fixing: it's listed first
+
+	opened := func() model {
+		m := newModel(context.Background(), withDefaults(config{}), &pagedSource{}, "", nil)
+		m.width, m.height = 100, 30
+		return m.useCache(map[tab][]pullRequest{tabMine: prsNumbered(1, 2)})
+	}
+	m := opened()
+	if m.selected().pr.Number != 1 {
+		t.Fatalf("opened on #%d", m.selected().pr.Number)
+	}
+	next, _ := m.Update(listMsg{tab: tabMine, prs: fresh, gen: m.gen})
+	if got := next.(model); got.selected().pr.Number != 9 || got.offset != 0 {
+		t.Fatalf("untouched, the cursor went down the list with #%d:\n%s", got.selected().pr.Number, plain(got))
+	}
+	// Moved, it stays with the PR you put it on.
+	m = press(opened(), "down")
+	next, _ = m.Update(listMsg{tab: tabMine, prs: fresh, gen: m.gen})
+	if got := next.(model); got.selected().pr.Number != 2 {
+		t.Fatalf("moved to #2, the cursor is on #%d", got.selected().pr.Number)
+	}
+	// Last time's list is grouped as a fresh one is, however it was kept.
+	m = opened().useCache(map[tab][]pullRequest{tabMine: fresh})
+	if m.selected().pr.Number != 9 {
+		t.Fatalf("the kept list isn't in the groups' order: on #%d", m.selected().pr.Number)
+	}
+}
+
 // pagedRepos serves the repo list in two pages.
 type pagedRepos struct{ pagedSource }
 

@@ -862,7 +862,7 @@ func (m model) noPRForAgent() model {
 	m.err = "No pull request found for this agent"
 	if m.repo != nil {
 		m.err += ": these are " + m.repo.String() + "'s"
-		m.tab, m.cursor, m.offset, m.wantRepoRow = tabRepo, 0, 0, false
+		m.tab, m.cursor, m.offset, m.wantRepoRow, m.chose = tabRepo, 0, 0, false, false
 		m.mode = modeLoading
 		if m.loaded[tabRepo] {
 			m.mode = modeList

@@ -244,7 +244,7 @@ func TestFailedLoadStopsTheSpinner(t *testing.T) {
 
 // d goes by the PR as just loaded, and waits for it after a change.
 func TestDraftWaitsForTheFreshPR(t *testing.T) {
-	m := press(demoModel(t, tabMine), "enter")
+	m := press(onPR(t, demoModel(t, tabMine), 482), "enter")
 	m.curDetail = nil
 	m = press(m, "d")
 	if m.mode == modeBusy || m.flash != "Still loading…" {
