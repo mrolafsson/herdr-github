@@ -39,15 +39,16 @@ opened it and any that worked on it since, a key or a click away.
 
 ## Works with the other herdr plugins
 
-This is one of three plugins that are useful alone and better together.
-Install [herdr-recap](https://github.com/mrolafsson/herdr-recap) or [herdr-linear](https://github.com/mrolafsson/herdr-linear) alongside it and they find each other:
+This is one of four plugins that are useful alone and better together.
+Install [herdr-recap](https://github.com/mrolafsson/herdr-recap), [herdr-linear](https://github.com/mrolafsson/herdr-linear) or [herdr-snooze](https://github.com/mrolafsson/herdr-snooze) alongside it and they find each other:
 there is nothing to configure.
 
 | Plugin | What it adds to the others |
 | --- | --- |
-| [herdr-recap](https://github.com/mrolafsson/herdr-recap) | Every agent in one list. An agent's pull request and its Linear issue are links there: a click, or `ctrl+g` / `ctrl+l`, opens it in the plugin it belongs to. |
+| [herdr-recap](https://github.com/mrolafsson/herdr-recap) | Every agent in one list. An agent's pull request and its Linear issue are links there: a click, or `ctrl+g` / `ctrl+l`, opens it in the plugin it belongs to. Snoozed agents have a tab of their own: `ctrl+s` snoozes an agent, in Snooze's popup, and `ctrl+w` wakes one. |
 | **[herdr-github](https://github.com/mrolafsson/herdr-github)** (this one) | Tags every space and agent with its branch's pull request (`#482 ✓ approved`), which Recap shows and groups its agents by. Opens straight on an agent's PR when Recap asks. |
 | [herdr-linear](https://github.com/mrolafsson/herdr-linear) | Tags every space and agent with the Linear issue its branch is named for (`ENG-142 In Progress`), which Recap shows. Opens straight on that issue when Recap asks. |
+| [herdr-snooze](https://github.com/mrolafsson/herdr-snooze) | Hides an agent, or a whole space, from herdr's Agents panel until a time you pick. Tags each snoozed agent with when it wakes (`💤 17:30`), which Recap shows. Opens straight on an agent when Recap asks, and opens Recap on one with `r`. |
 
 - **Auto-discovery.** Each plugin asks herdr which others are installed and
   enabled. A link only appears when the plugin behind it is there; without
@@ -56,7 +57,7 @@ there is nothing to configure.
   following a link turns the open popup into the other plugin's, in place and
   without a flicker, and `esc` there brings you back to where you were.
 - **Shared look.** A title, a branch, a pull request and a key are
-  drawn the same in all three, in herdr's theme colours.
+  drawn the same in all four, in herdr's theme colours.
 
 See [Sidebar labels](#sidebar-labels) for the tags and [Opened from another popup](#opened-from-another-popup) for the convention behind the links.
 
@@ -523,8 +524,8 @@ A copy is in [`config.example.json`](config.example.json).
 
 Colours follow herdr's own `[theme]` (how it's read is described in
 [herdr-linear](https://github.com/mrolafsson/herdr-linear#colours)).
-The herdr plugins (herdr-github, herdr-linear, herdr-recap) draw the same
-thing the same way, from one shared file (`look.go`):
+The herdr plugins (herdr-github, herdr-linear, herdr-recap, herdr-snooze)
+draw the same thing the same way, from one shared file (`look.go`):
 
 | what                 | how it's drawn |
 |----------------------|----------------|

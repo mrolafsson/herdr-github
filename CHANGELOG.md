@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.2 — 2026-10-12
+
+- **herdr-snooze joins the plugins that work together.** The README's table
+  has it, with Recap's Snoozed tab and its `ctrl+s` / `ctrl+w`; the shared
+  look (`look.go`) is now kept the same in all four.
+- **The screenshots script stops, rather than drawing an emoji as a box**,
+  when the machine has no `rsvg-convert`, JetBrains Mono or emoji font, and
+  says what to install.
+
 ## 0.8.1 — 2026-10-12
 
 - The tabs no longer say **GitHub** before them: the popup's frame already
