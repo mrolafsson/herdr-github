@@ -16,7 +16,7 @@ func plain(m model) string { return stripStyles(m.View()) }
 func TestTabsListAndGroup(t *testing.T) {
 	m := demoModel(t, tabMine)
 	v := plain(m)
-	for _, want := range []string{"GitHub", "Mine 4", "notes-app · 30m", "sync-server · 5h", "#482", "Offline edits",
+	for _, want := range []string{"Mine 4", "notes-app · 30m", "sync-server · 5h", "#482", "Offline edits",
 		"sam/offline-conflicts · +318 −74 · approved · ✓ checks · worktree", "✗ checks", "changes requested"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("mine tab lacks %q:\n%s", want, v)
@@ -132,16 +132,16 @@ func TestGroupsAreWhoseMoveItIs(t *testing.T) {
 	}
 }
 
-// The first line names the popup and the tabs; too narrow for that, the name
-// goes, then the labels shorten, and a click still lands on the tab drawn.
+// The first line is the tabs (the popup's name is on its frame); too narrow,
+// the labels shorten, and a click still lands on the tab drawn.
 func TestTabBarFitsTheWidth(t *testing.T) {
 	for width := 70; width >= 26; width-- {
 		m := demoModel(t, tabReview)
 		m.width = width
 		line, cells := m.tabBar()
 		bar := stripStyles(line)
-		// At their shortest the tabs are 31 cells; under that the line is cut.
-		if got := ansi.StringWidth(bar); got > max(width, 31) || ansi.StringWidth(strings.Split(plain(m), "\n")[0]) > width {
+		// At their shortest the tabs are 32 cells; under that the line is cut.
+		if got := ansi.StringWidth(bar); got > max(width, 32) || ansi.StringWidth(strings.Split(plain(m), "\n")[0]) > width {
 			t.Fatalf("at %d cells the tabs are %d wide: %q", width, got, bar)
 		}
 		for _, c := range cells {
@@ -155,7 +155,7 @@ func TestTabBarFitsTheWidth(t *testing.T) {
 		}
 	}
 	wide := plain(demoModel(t, tabMine))
-	if !strings.HasPrefix(wide, " GitHub   Mine 4  Review requested 3  notes-app 7 ") {
+	if !strings.HasPrefix(wide, "  Mine 4  Review requested 3  notes-app 7 ") {
 		t.Fatalf("with room for it all:\n%s", wide)
 	}
 }
