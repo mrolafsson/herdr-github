@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.0 — 2026-10-12
+
+- **The lists are grouped by whose move it is**, yours first, as Recap's
+  agents are: *Needs fixing* (checks failed, in conflict, changes
+  requested), *Ready to merge*, *Waiting* (on reviewers, or checks still
+  running) and *Drafts*; *Review requested* leads with *To review*. Each
+  group has a heading in its colour with its count, and the heading of
+  whatever you've scrolled to stays at the top. Within a group, newest
+  first. *Mine* used to be grouped by repo; a PR's repo is now on its row.
+- **A PR is two lines.** Its title has the line to itself, with whose it
+  is, where and when at the right edge (`priya · notes-app · 3h`). Under
+  it, each in its own colour: its branch, `+318 −74`, its review, its
+  checks, `auto-merge`, `worktree`, and its agent, which a click still goes
+  to.
+- **Said, not marked.** Checks are `✓ checks`, `✗ checks`, `● checks`, a
+  worktree is `worktree` (it was `⌥`), and `changes requested` and
+  `auto-merge` are spelled out. A PR in conflict shows its review too.
+- **The line above the keys is about the selected PR**: its labels, and the
+  branch it's to be merged into.
+- **A header like Recap's**: the popup's name, the tab you're on as a pill,
+  and room between the tabs, the filter and the list. Too narrow for the
+  tabs, the name goes, then the labels shorten.
+- **Fewer keys along the bottom.** The filter says how to change tabs
+  (`← →`; `tab` still works), and `esc` says when it will clear the filter
+  rather than close.
+- **The cursor stays on the first PR** when a fresher list changes the
+  order, until you've moved it; after that it stays with the PR you chose.
+  Coming back from a PR's screen, it's on that PR wherever it's now listed.
+- The spinner is `◔ ◕`: braille could come from a fallback font, at the
+  wrong width.
+- **pgup / pgdn** move by what fits, whatever the rows' heights.
+
 ## 0.6.0 — 2026-10-11
 
 - **`esc` goes back to the popup you came from.** herdr-recap opens this
