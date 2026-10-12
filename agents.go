@@ -26,13 +26,21 @@ import (
 // which session each pane runs. So on each tick the new lines of the recent
 // transcripts are read, and each PR remembered with its sessions: the sidebar
 // lists an agent's PRs, its branch's and the ones it opened ($prs), and the
-// popup lists a PR's agents and takes you to them.
+// popup lists a PR's agents and takes you to them. One that's merged or
+// closed leaves $prs for $prs_past, which isn't for showing: it's there so
+// the agent can still be found by a PR it's done with.
 //
 // Only Claude Code keeps such notes; other agents have their branch's PR.
 
 const (
 	// prsShown is how many PRs $prs spells out before it counts the rest.
 	prsShown = 3
+	// pastKept is how long a PR is remembered after it's merged or closed,
+	// pastShown how many of them $prs_past names, and pastFresh how often
+	// GitHub is asked whether one is still shut.
+	pastKept  = 14 * 24 * time.Hour
+	pastShown = 12
+	pastFresh = 6 * time.Hour
 	// transcriptLineLimit skips a line too long to be one of the notes (a
 	// pasted image, say) without holding it in memory.
 	transcriptLineLimit = 4 << 20
@@ -43,7 +51,8 @@ const (
 	transcriptQuiet = 24 * time.Hour
 )
 
-// trackedPR is an open pull request that Claude sessions have worked on.
+// trackedPR is a pull request that Claude sessions have worked on: open, or
+// not long merged or closed.
 type trackedPR struct {
 	Host    string            `json:"host"`
 	Owner   string            `json:"owner"`
@@ -76,6 +85,15 @@ func openedKey(r repoRef, number int) string { return r.key() + "#" + strconv.It
 func (t trackedPR) key() string { return openedKey(t.repo(), t.Number) }
 
 func (t trackedPR) open() bool { return t.Status != nil && t.Status.State == "OPEN" }
+
+// past: it's been merged or closed.
+func (t trackedPR) past() bool { return t.Status != nil && t.Status.State != "OPEN" }
+
+// expired: it was merged or closed too long ago to remember (or GitHub
+// didn't say when).
+func (t trackedPR) expired(now time.Time) bool {
+	return t.past() && (t.Status.ClosedAt == nil || now.Sub(*t.Status.ClosedAt) > pastKept)
+}
 
 // opener is the session that opened the PR, "" if none here did. Two can
 // claim to (one did, another ran a command that looked like it): the earlier.
@@ -376,17 +394,27 @@ var numberLookupFn = func(ctx context.Context, r repoRef, numbers []int) (map[in
 }
 
 // refreshTracked asks GitHub how the tracked PRs are doing, a repo at a
-// time, for those whose answer is due. One that's merged or closed is
-// forgotten: what's wanted is who to ask about an open PR.
+// time, for those whose answer is due. One that's merged or closed is kept
+// for pastKept (its agent can still be found by it), asked about only now
+// and then in case it was reopened, and after that forgotten.
 func (st *labelState) refreshTracked(ctx context.Context, cfg config, now time.Time, force bool) error {
 	fresh := time.Duration(cfg.LabelRefreshSeconds) * time.Second
 	due := map[string][]trackedPR{} // repo key → PRs
-	for _, pr := range st.PRs {
+	for key, pr := range st.PRs {
+		if pr.expired(now) {
+			delete(st.PRs, key)
+			continue
+		}
 		rk := pr.repo().key()
 		if failed, ok := st.Failed[rk]; ok && !force && now.Sub(failed) < fresh {
 			continue
 		}
-		if force || pr.Status == nil || now.Sub(pr.Fetched) >= fresh {
+		switch {
+		case pr.past():
+			if now.Sub(pr.Fetched) >= pastFresh {
+				due[rk] = append(due[rk], pr)
+			}
+		case force || pr.Status == nil || now.Sub(pr.Fetched) >= fresh:
 			due[rk] = append(due[rk], pr)
 		}
 	}
@@ -408,11 +436,11 @@ func (st *labelState) refreshTracked(ctx context.Context, cfg config, now time.T
 			delete(st.Failed, rk)
 			for _, pr := range batch {
 				s, ok := found[pr.Number]
-				if !ok || s.State != "OPEN" {
-					delete(st.PRs, pr.key()) // gone, merged or closed
+				pr.Fetched, pr.Status = now, &s
+				if !ok || pr.expired(now) {
+					delete(st.PRs, pr.key()) // gone, or merged or closed long ago
 					continue
 				}
-				pr.Fetched, pr.Status = now, &s
 				st.PRs[pr.key()] = pr
 			}
 		}
@@ -429,6 +457,36 @@ func (st *labelState) openByPane() map[string][]trackedPR {
 		}
 	}
 	return out
+}
+
+// pastByPane is each pane's PRs that are merged or closed: the ones its
+// agent opened.
+func (st *labelState) pastByPane() map[string][]trackedPR {
+	out := map[string][]trackedPR{}
+	for _, pr := range st.PRs {
+		if pane := st.Sessions[pr.opener()].Pane; pane != "" && pr.past() {
+			out[pane] = append(out[pane], pr)
+		}
+	}
+	return out
+}
+
+// pastToken is $prs_past: the merged and closed PRs opened there, newest
+// first, by number alone ("#1155 #1149"). It's to find an agent by, not to
+// show, so it says nothing of their state: a filter for "merged" shouldn't
+// find an agent that has since moved on. The branch's PR, which $prs has
+// whatever its state, is left out.
+func pastToken(branchKey string, past []trackedPR) string {
+	sort.Slice(past, func(i, j int) bool { return past[i].Number > past[j].Number })
+	var parts []string
+	seen := map[string]bool{branchKey: true}
+	for _, pr := range past {
+		if !seen[pr.key()] && len(parts) < pastShown {
+			seen[pr.key()] = true
+			parts = append(parts, fmt.Sprintf("#%d", pr.Number))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // prsToken is $prs, every PR that's an agent's (or a space's) in one list:

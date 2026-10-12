@@ -658,6 +658,7 @@ type prStatus struct {
 	AutoMergeRequest    *struct {
 		EnabledAt string `json:"enabledAt"`
 	} `json:"autoMergeRequest"`
+	ClosedAt *time.Time `json:"closedAt,omitempty"` // when it was merged or closed, where that was asked
 }
 
 func (s prStatus) checks() string {
@@ -750,7 +751,7 @@ func (c *ghClient) prsByNumber(ctx context.Context, r repoRef, numbers []int) (m
 	b.WriteString(") { repository(owner: $owner, name: $name) {")
 	for i := range numbers {
 		fmt.Fprintf(&b, ` n%[1]d: pullRequest(number: $n%[1]d) {
-  number state isDraft reviewDecision mergeable url headRepositoryOwner { login }
+  number state isDraft reviewDecision mergeable url closedAt headRepositoryOwner { login }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
   autoMergeRequest { enabledAt }
 }`, i)

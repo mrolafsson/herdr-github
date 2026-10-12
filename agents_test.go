@@ -240,6 +240,7 @@ func TestTickTracksThePRsAgentsOpened(t *testing.T) {
 	h.panes = []paneInfo{claudePane("p1", "w1", "session-aaaa", nil), claudePane("p2", "w2", "session-bbbb", nil), {PaneID: "p3", WorkspaceID: "w1"}}
 
 	states := map[int]string{7: "OPEN", 9: "OPEN"}
+	closed := map[int]time.Time{} // when each was merged or closed
 	var asked [][]int
 	oldLookup := numberLookupFn
 	t.Cleanup(func() { numberLookupFn = oldLookup })
@@ -251,7 +252,11 @@ func TestTickTracksThePRsAgentsOpened(t *testing.T) {
 		out := map[int]prStatus{}
 		for _, n := range numbers {
 			if s, ok := states[n]; ok {
-				out[n] = prStatus{Number: n, State: s, Commits: rollupOf([]check{{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SUCCESS"}})}
+				st := prStatus{Number: n, State: s, Commits: rollupOf([]check{{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SUCCESS"}})}
+				if at, ok := closed[n]; ok {
+					st.ClosedAt = &at
+				}
+				out[n] = st
 			}
 		}
 		return out, nil
@@ -268,16 +273,20 @@ func TestTickTracksThePRsAgentsOpened(t *testing.T) {
 		for i, p := range h.panes {
 			if r := reportFor(reports, "pane_id", p.PaneID); r != nil {
 				h.panes[i].Tokens = map[string]string{}
-				if v, ok := r["tokens"].(map[string]any)["prs"].(string); ok {
-					h.panes[i].Tokens["prs"] = v
+				for _, name := range []string{"prs", "prs_past"} {
+					if v, ok := r["tokens"].(map[string]any)[name].(string); ok {
+						h.panes[i].Tokens[name] = v
+					}
 				}
 			}
 		}
 		for i, w := range h.workspaces {
 			if r := reportFor(reports, "workspace_id", w.WorkspaceID); r != nil {
 				h.workspaces[i].Tokens = map[string]string{}
-				if v, ok := r["tokens"].(map[string]any)["prs"].(string); ok {
-					h.workspaces[i].Tokens["prs"] = v
+				for _, name := range []string{"prs", "prs_past"} {
+					if v, ok := r["tokens"].(map[string]any)[name].(string); ok {
+						h.workspaces[i].Tokens[name] = v
+					}
 				}
 			}
 		}
@@ -334,22 +343,71 @@ func TestTickTracksThePRsAgentsOpened(t *testing.T) {
 		t.Fatalf("one line for a pane, whatever its session: %s", got)
 	}
 
-	// Merged: no longer the agent's to watch.
+	// Merged or closed: no longer the agent's to watch, so out of $prs. It's
+	// still the agent's to be found by, in $prs_past, by number alone.
 	states[9], states[11] = "MERGED", "CLOSED"
+	closed[9], closed[11] = start.Add(3*time.Minute), start.Add(3*time.Minute)
 	at(4 * time.Minute)
 	_ = tick(context.Background(), cfg, false)
 	reports = h.takeReports()
 	if got := prs(reports, "pane_id", "p1"); got != "#7 ✓" {
 		t.Fatalf("after a merge: %v", got)
 	}
-	shows(reports)
-	if got := agents(9); got != "" {
-		t.Fatalf("a merged PR is still remembered: %s", got)
+	past := func(reports []map[string]any, key, id string) any {
+		if r := reportFor(reports, key, id); r != nil {
+			return r["tokens"].(map[string]any)["prs_past"]
+		}
+		return "(no report)"
 	}
+	if p, w := past(reports, "pane_id", "p1"), past(reports, "workspace_id", "w1"); p != "#11 #9" || w != "#11 #9" {
+		t.Fatalf("the merged and closed ones aren't kept to be found by: pane %v, space %v", p, w)
+	}
+	shows(reports)
+	if got := agents(9); got != "agent p1@p1 opened it" {
+		t.Fatalf("a merged PR's agent: %s", got)
+	}
+	// Shut, it isn't asked about every time, and it isn't one of the PRs the
+	// "pr" action would open on.
+	asked = nil
+	at(5 * time.Minute)
+	_ = tick(context.Background(), cfg, false)
+	h.takeReports()
+	if fmt.Sprint(asked) != "[[7]]" {
+		t.Fatalf("asked about shut PRs again: %v", asked)
+	}
+	if got := fmt.Sprint(panePRs(readLabelState(), "p1", "w1")); got != "[github.com/o/r#7]" {
+		t.Fatalf("a shut PR is among the agent's to open: %s", got)
+	}
+	// Reopened: back in $prs, once GitHub is asked again.
+	states[11] = "OPEN"
+	delete(closed, 11)
+	at(5*time.Minute + pastFresh)
+	_ = tick(context.Background(), cfg, false)
+	reports = h.takeReports()
+	if p, was := prs(reports, "pane_id", "p1"), past(reports, "pane_id", "p1"); p != "#11 ✓ #7 ✓" || was != "#9" {
+		t.Fatalf("reopened: prs %v, past %v", p, was)
+	}
+	shows(reports)
+	// Long merged: forgotten.
+	at(4*time.Minute + pastKept)
+	_ = tick(context.Background(), cfg, false)
+	reports = h.takeReports()
+	if was := past(reports, "pane_id", "p1"); was != nil || agents(9) != "" {
+		t.Fatalf("still remembered after %v: %v, %s", pastKept, was, agents(9))
+	}
+	shows(reports)
+	states[11], closed[11] = "CLOSED", start // closed long ago: forgotten at once
+	at(5*time.Minute + pastKept)
+	_ = tick(context.Background(), cfg, false)
+	reports = h.takeReports()
+	if got := prs(reports, "pane_id", "p1"); got != "#7 ✓" || agents(11) != "" {
+		t.Fatalf("after closing #11: %v, %s", got, agents(11))
+	}
+	shows(reports)
 
 	// The pane closes: the PR is still its session's, with nowhere to go.
 	h.panes = h.panes[1:]
-	at(6 * time.Minute)
+	at(6*time.Minute + pastKept)
 	_ = tick(context.Background(), cfg, false)
 	reports = h.takeReports()
 	if got := prs(reports, "workspace_id", "w1"); got != nil {
@@ -360,7 +418,7 @@ func TestTickTracksThePRsAgentsOpened(t *testing.T) {
 	}
 	// Its session comes back in another pane: so does the PR.
 	h.panes = append(h.panes, claudePane("p9", "w2", "session-aaaa", nil))
-	at(8 * time.Minute)
+	at(8*time.Minute + pastKept)
 	_ = tick(context.Background(), cfg, false)
 	if got := prs(h.takeReports(), "pane_id", "p9"); got != "#7 ✓" {
 		t.Fatalf("resumed elsewhere: %v", got)
@@ -370,7 +428,7 @@ func TestTickTracksThePRsAgentsOpened(t *testing.T) {
 	off := false
 	cfg.AgentPRs = &off
 	h.panes[len(h.panes)-1].Tokens = map[string]string{"prs": "#7 ✓"}
-	at(10 * time.Minute)
+	at(10*time.Minute + pastKept)
 	_ = tick(context.Background(), cfg, false)
 	if got := prs(h.takeReports(), "pane_id", "p9"); got != nil {
 		t.Fatalf("off, but still shown: %v", got)

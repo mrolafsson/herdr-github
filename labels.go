@@ -37,7 +37,7 @@ const (
 // cleared.
 var (
 	branchTokenNames = []string{"pr", "pr_badge", "pr_state", "pr_checks", "pr_review"}
-	tokenNames       = append([]string{"prs"}, branchTokenNames...)
+	tokenNames       = append([]string{"prs", "prs_past"}, branchTokenNames...)
 )
 
 // labelState is labels.json: what GitHub last said per branch, when the
@@ -47,11 +47,17 @@ type labelState struct {
 	Branches map[string]branchEntry `json:"branches"` // host/owner/repo + "\x00" + owner:branch
 	Reported map[string]reported    `json:"reported"` // space or pane ID → what was sent
 	Failed   map[string]time.Time   `json:"failed"`   // repo key → when GitHub last failed to answer
-	PRs      map[string]trackedPR   `json:"prs"`      // openedKey → an open PR and its sessions
+	PRs      map[string]trackedPR   `json:"prs"`      // openedKey → a PR and its sessions
 	Sessions map[string]sessionSeen `json:"sessions"` // Claude session → its name, and its pane
 	Scanned  map[string]int64       `json:"scanned"`  // transcript → how far it's been read
 	Swept    time.Time              `json:"swept"`    // when the transcripts were last gone through
+	Noted    int                    `json:"noted"`    // what was kept of them then (notedNow)
 }
+
+// notedNow is what's kept of the transcripts' PRs: 1, merged and closed ones
+// too, for a while. A state kept by a version that noted less has the
+// transcripts read again, for what it let go.
+const notedNow = 1
 
 type branchEntry struct {
 	Fetched time.Time `json:"fetched"`
@@ -191,10 +197,11 @@ func tokenParams(t map[string]string) map[string]any {
 	return out
 }
 
-// tokensFor is what a space or pane should show: its branch's PR, and that
-// PR with the ones opened there as one list.
-func tokensFor(branch map[string]string, prs string) map[string]string {
-	if len(branch) == 0 && prs == "" {
+// tokensFor is what a space or pane should show: its branch's PR, that PR
+// with the ones opened there as one list, and (to be found by, not shown)
+// the ones opened there that are merged or closed.
+func tokensFor(branch map[string]string, prs, past string) map[string]string {
+	if len(branch) == 0 && prs == "" && past == "" {
 		return nil
 	}
 	out := map[string]string{}
@@ -203,6 +210,9 @@ func tokensFor(branch map[string]string, prs string) map[string]string {
 	}
 	if prs != "" {
 		out["prs"] = prs
+	}
+	if past != "" {
+		out["prs_past"] = past
 	}
 	return out
 }
@@ -338,6 +348,9 @@ func tick(ctx context.Context, cfg config, force bool) error {
 	case !cfg.agentPRsOn():
 		st.PRs, st.Sessions, st.Scanned, st.Swept = map[string]trackedPR{}, map[string]sessionSeen{}, map[string]int64{}, time.Time{}
 	case panesErr == nil:
+		if st.Noted < notedNow {
+			st.Swept, st.Noted = time.Time{}, notedNow
+		}
 		st.trackSessions(cfg, panes, now)
 		openedErr = st.refreshTracked(ctx, cfg, now, force)
 	}
@@ -404,14 +417,15 @@ func tick(ctx context.Context, cfg config, force bool) error {
 	for _, p := range panes {
 		byWS[p.WorkspaceID] = append(byWS[p.WorkspaceID], p)
 	}
-	openBy := st.openByPane()
+	openBy, pastBy := st.openByPane(), st.pastByPane()
 	live := map[string]bool{}
 	for _, w := range wss {
 		live[w.WorkspaceID] = true
-		var opened []trackedPR
+		var opened, past []trackedPR
 		for _, p := range byWS[w.WorkspaceID] {
 			live[p.PaneID] = true
 			opened = append(opened, openBy[p.PaneID]...)
+			past = append(past, pastBy[p.PaneID]...)
 		}
 		var branchPR *prStatus
 		key, branchKey := "", ""
@@ -430,15 +444,16 @@ func tick(ctx context.Context, cfg config, force bool) error {
 			}
 		}
 		branch := badgeTokens(branchPR)
-		prs := prsToken(branchPR, branchKey, opened)
+		prs, was := prsToken(branchPR, branchKey, opened), pastToken(branchKey, past)
 		if panesErr != nil {
-			prs = w.Tokens["prs"] // herdr didn't list the panes: what was opened here isn't known
+			// herdr didn't list the panes: what was opened here isn't known.
+			prs, was = w.Tokens["prs"], w.Tokens["prs_past"]
 		}
-		st.report("workspace", w.WorkspaceID, tokensFor(branch, prs), w.Tokens, now, key)
+		st.report("workspace", w.WorkspaceID, tokensFor(branch, prs, was), w.Tokens, now, key)
 		for _, p := range byWS[w.WorkspaceID] {
 			var want map[string]string
 			if p.Agent != "" { // only agents are labelled; a shell keeps its own
-				want = tokensFor(branch, prsToken(branchPR, branchKey, openBy[p.PaneID]))
+				want = tokensFor(branch, prsToken(branchPR, branchKey, openBy[p.PaneID]), pastToken(branchKey, pastBy[p.PaneID]))
 			}
 			st.report("pane", p.PaneID, want, p.Tokens, now, key)
 		}

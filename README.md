@@ -391,7 +391,8 @@ the status is the first thing to go.
 | `$pr_state`  | `open`, `draft`, `merged`, `closed` |
 | `$pr_checks` | `✓`, `✗`, `●` (open PRs)       |
 | `$pr_review` | `approved`, `changes requested`, `needs review` (open PRs) |
-| `$prs`       | `#482 ✓ approved #1103 ● #1101 ✓`: every PR that's this agent's, in one list: its branch's, then the others it opened (see [below](#a-prs-agents)) |
+| `$prs`       | `#482 ✓ approved #1103 ● #1101 ✓`: every PR that's this agent's, in one list: its branch's, then the open ones it opened (see [below](#a-prs-agents)) |
+| `$prs_past`  | `#1155 #1146`: the PRs it opened that are since merged or closed, for two weeks after. Not for a row: it's what [herdr-recap](https://github.com/mrolafsson/herdr-recap)'s filter finds an agent by once its PR is done |
 
 Style them like any token, e.g. `{ token = "$pr_badge", dim = true }`.
 
@@ -449,6 +450,12 @@ track of every agent that has to do with an open PR:
   #1103 ● #1101 ✓`). A PR that's both is there once; past three, the rest
   are counted (`+2`). A space has its agents' together. It's the one token
   an agent's row needs; `$pr` and `$pr_badge` are the branch's PR alone.
+- **A PR that's merged or closed** leaves `$prs` (unless the agent is still
+  on its branch) for **`$prs_past`**: numbers alone, newest first, kept for
+  two weeks. It isn't meant for a sidebar row. It's there so an agent that
+  has moved on to the next thing can still be found by the PR it finished:
+  Recap's filter matches it without showing it. For those two weeks the
+  popup still lists the PR's agents too.
 
 There's nothing to set up. Claude Code notes in each session's transcript
 the PRs it works on and the ones it created (its own commands or a
@@ -611,7 +618,8 @@ what went wrong, if anything. A space on `main`, or on a branch with no PR,
 has none.
 
 **An agent's PR isn't in `$prs`, or a PR has no agent.** `$prs` shows PRs
-that are open and that the agent opened itself. A session is matched to
+that are open and that the agent opened itself (merged and closed ones are
+in `$prs_past`). A session is matched to
 its pane by the session ID herdr knows (`herdr agent list` shows an
 `agent_session`; `herdr integration install claude` if not); without one
 it's listed as having no pane. Either appears at the next tick: when the
