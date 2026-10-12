@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0 — 2026-10-12
+
+- **An agent can still be found by a PR it's done with.** A PR an agent
+  opened used to be forgotten the moment it was merged or closed, so once
+  the agent moved to another branch nothing tied the two together. It's now
+  remembered for two weeks, in a new token, **`$prs_past`** (`#1155 #1146`:
+  numbers alone, newest first). The token isn't for a sidebar row:
+  herdr-recap 0.5.4 searches it without showing it, so filtering Recap by a
+  merged PR's number finds the agent that opened it. `$prs` is unchanged.
+- For those two weeks the popup lists a merged or closed PR's agents too.
+- The first tick after upgrading reads the last month's transcripts again,
+  for the PRs earlier versions let go; it takes a few seconds, once.
+
 ## 0.7.0 — 2026-10-12
 
 - **The lists are grouped by whose move it is**, yours first, as Recap's
