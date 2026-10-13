@@ -42,7 +42,6 @@ opened it and any that worked on it since, a key or a click away.
 This is one of four plugins that are useful alone and better together.
 Install [herdr-recap](https://github.com/mrolafsson/herdr-recap), [herdr-linear](https://github.com/mrolafsson/herdr-linear) or [herdr-snooze](https://github.com/mrolafsson/herdr-snooze) alongside it and they find each other:
 there is nothing to configure.
-[herdr-overwatch](https://github.com/mrolafsson/herdr-overwatch) installs all four at once, with a key bound to each.
 
 | Plugin | What it adds to the others |
 | --- | --- |
